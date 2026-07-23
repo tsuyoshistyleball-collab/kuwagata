@@ -423,14 +423,9 @@ function fireShot(x, y, side, dmg, color, pierce) {
 
 function doAttack() {
   if (beetle.atkCd > 0) return;
-  if (state === STATE.PLAY) {
-    beetle.atkCd = 0.42;
-    beetle.atkAnim = 0.3;
-    sfx.attack();
-    // ボス戦と同じ「光の弾」を前方へ発射（強化で貫通数アップ）
-    const pierce = 1 + Math.floor(beetle.power / 3);
-    fireShot(beetle.x + beetle.size * 2, beetle.y, 'player', 1, '#FFE873', pierce);
-  } else if (state === STATE.BOSS && boss.active && !boss.defeated && boss.introT <= 0) {
+  // 通常ステージもボスステージも同じ仕様：前方へ光の弾を1発撃つ
+  const bossReady = state === STATE.BOSS && boss.active && !boss.defeated && boss.introT <= 0;
+  if (state === STATE.PLAY || bossReady) {
     beetle.atkCd = 0.42;
     beetle.atkAnim = 0.3;
     sfx.attack();
@@ -642,22 +637,14 @@ function updateCompanions(dt) {
 
     c.atkCd -= dt;
     if (c.atkCd <= 0) {
-      if (state === STATE.BOSS) {
-        if (boss.active && !boss.defeated && boss.introT <= 0) {
-          fireShot(c.x, c.y, 'player', 1, '#FF8A5B');
-          c.atkCd = 1.0;
-        } else { c.atkCd = 0.5; }
-      } else if (state === STATE.PLAY) {
-        // 近くの障害物を攻撃してくれる
-        const idx = findObstacleAhead(c.x, beetle.size * 2, beetle.size * 5);
-        if (idx >= 0) {
-          const sx = obstacles[idx].x - scrollX;
-          const oy = obstacles[idx].type === 'top' ? obstacles[idx].h * 0.6 : H * 0.88 - obstacles[idx].h * 0.6;
-          burstParticles(c.x, c.y, '#FFFFFF', 4);
-          smashObstacleIndex(idx);
-          c.atkCd = 1.2;
-        } else { c.atkCd = 0.4; }
-      } else { c.atkCd = 0.6; }
+      // 通常ステージもボスステージも同じ仕様：仲間も前方へ弾を撃つ
+      const bossNotReady = state === STATE.BOSS && (!boss.active || boss.defeated || boss.introT > 0);
+      if (bossNotReady) {
+        c.atkCd = 0.4;   // ボス登場前は撃たない
+      } else {
+        fireShot(c.x, c.y, 'player', 1, '#FF8A5B', 1);
+        c.atkCd = 1.0;
+      }
     }
   }
 }

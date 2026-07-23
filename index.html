@@ -92,7 +92,10 @@ function beep(freq, dur, type, vol, delay) {
 }
 const sfx = {
   collect() { beep(880, 0.12, 'sine', 0.18); beep(1320, 0.18, 'sine', 0.15, 0.08); },
+  powerup() { [660, 990, 1320, 1760].forEach((f, i) => beep(f, 0.18, 'triangle', 0.16, i * 0.05)); },
   hit() { beep(160, 0.25, 'square', 0.12); beep(110, 0.3, 'square', 0.1, 0.08); },
+  attack() { beep(300, 0.08, 'sawtooth', 0.12); beep(180, 0.12, 'square', 0.1, 0.03); },
+  smash() { beep(220, 0.15, 'square', 0.14); beep(140, 0.2, 'sawtooth', 0.12, 0.04); beep(660, 0.1, 'triangle', 0.1, 0.02); },
   goal() {
     [523, 659, 784, 1047, 1319].forEach((f, i) => beep(f, 0.35, 'triangle', 0.18, i * 0.15));
   },
@@ -110,7 +113,10 @@ const beetle = {
   size: 0,          // 半径ベース
   wingPhase: 0,
   invincible: 0,    // 無敵時間（秒）
-  tilt: 0
+  tilt: 0,
+  atkCd: 0,         // 攻撃のクールダウン（秒）
+  atkAnim: 0,       // 攻撃モーションの残り時間（秒）
+  power: 0          // 強化レベル（ゼリーの数と連動）
 };
 
 let scrollX = 0;         // 進んだ距離
@@ -171,37 +177,110 @@ function resetGame() {
   beetle.vy = 0;
   beetle.size = Math.min(W, H) * 0.055;
   beetle.invincible = 0;
+  beetle.atkCd = 0;
+  beetle.atkAnim = 0;
+  beetle.power = 0;
   particles = [];
   confetti = [];
   shake = 0;
   courseSetup();
 }
 
+// ---------- 攻撃ボタン ----------
+// 左下に配置。指で押すと前方の障害物を壊す。
+function attackButton() {
+  const r = Math.min(W, H) * 0.1;
+  return { x: r + Math.min(W, H) * 0.04, y: H - r - Math.min(W, H) * 0.05, r };
+}
+function inButton(x, y) {
+  const b = attackButton();
+  const dx = x - b.x, dy = y - b.y;
+  return dx * dx + dy * dy <= (b.r * 1.2) * (b.r * 1.2);
+}
+
+function doAttack() {
+  if (state !== STATE.PLAY || beetle.atkCd > 0) return;
+  beetle.atkCd = 0.42;
+  beetle.atkAnim = 0.3;
+  sfx.attack();
+  // 強化するほど攻撃の届く範囲が広がる
+  const reach = beetle.size * 2.4 + Math.min(beetle.power, 12) * beetle.size * 0.16;
+  const groundY = H * 0.88;
+  let hitAny = false;
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const ob = obstacles[i];
+    const sx = ob.x - scrollX;
+    const left = sx - ob.w / 2, right = sx + ob.w / 2;
+    // クワガタの前方（右側）にある障害物を壊す
+    if (right > beetle.x - beetle.size * 0.6 && left < beetle.x + beetle.size + reach) {
+      const cy = ob.type === 'top' ? ob.h * 0.6 : groundY - ob.h * 0.6;
+      const col = ob.type === 'top' ? '#5B9E4D' : '#E85D5D';
+      burstParticles(sx, cy, col, 20);
+      burstParticles(sx, cy, '#FFE0A3', 8);
+      obstacles.splice(i, 1);
+      hitAny = true;
+    }
+  }
+  if (hitAny) { sfx.smash(); shake = Math.max(shake, 0.6); }
+}
+
 // ---------- 入力 ----------
-function pressStart(e) {
-  if (e) e.preventDefault();
-  initAudio();
-  pressing = true;
+let pointers = new Map();   // id -> 'fly' | 'atk'
+function refreshPressing() {
+  pressing = [...pointers.values()].includes('fly');
+}
+function tryStart() {
   if (state === STATE.TITLE || state === STATE.GOAL || state === STATE.RETRY) {
     if (stateTimer > 0.6) {   // 誤タップ防止に少し待つ
       resetGame();
       state = STATE.PLAY;
       sfx.start();
-      pressing = false;
     }
+    return true;
+  }
+  return false;
+}
+function pointerDown(id, x, y) {
+  initAudio();
+  if (tryStart()) return;             // タイトル等ではどこを押しても開始
+  if (inButton(x, y)) {
+    pointers.set(id, 'atk');
+    doAttack();
+  } else {
+    pointers.set(id, 'fly');
+    refreshPressing();
   }
 }
-function pressEnd(e) {
-  if (e) e.preventDefault();
-  pressing = false;
+function pointerUp(id) {
+  pointers.delete(id);
+  refreshPressing();
 }
-canvas.addEventListener('touchstart', pressStart, { passive: false });
-canvas.addEventListener('touchend', pressEnd, { passive: false });
-canvas.addEventListener('touchcancel', pressEnd, { passive: false });
-canvas.addEventListener('mousedown', pressStart);
-window.addEventListener('mouseup', pressEnd);
-window.addEventListener('keydown', (e) => { if (e.code === 'Space') pressStart(); });
-window.addEventListener('keyup', (e) => { if (e.code === 'Space') pressEnd(); });
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  for (const t of e.changedTouches) pointerDown(t.identifier, t.clientX, t.clientY);
+}, { passive: false });
+function touchEnd(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) pointerUp(t.identifier);
+}
+canvas.addEventListener('touchend', touchEnd, { passive: false });
+canvas.addEventListener('touchcancel', touchEnd, { passive: false });
+canvas.addEventListener('mousedown', (e) => pointerDown('mouse', e.clientX, e.clientY));
+window.addEventListener('mouseup', () => pointerUp('mouse'));
+// キーボード：スペース/↑で飛行、X/Enterで攻撃
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    if (!tryStart()) { pointers.set('key', 'fly'); refreshPressing(); }
+  } else if (e.code === 'KeyX' || e.code === 'Enter') {
+    if (!tryStart()) doAttack();
+  }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') pointerUp('key');
+});
+function attackHeld() { return [...pointers.values()].includes('atk'); }
 
 // ---------- 更新 ----------
 function update(dt) {
@@ -237,7 +316,12 @@ function update(dt) {
   updateDecor(dt, 1);
 
   if (beetle.invincible > 0) beetle.invincible -= dt;
+  if (beetle.atkCd > 0) beetle.atkCd -= dt;
+  if (beetle.atkAnim > 0) beetle.atkAnim -= dt;
   if (shake > 0) shake -= dt * 3;
+
+  // 攻撃ボタンを押しっぱなしにすると連続で攻撃
+  if (attackHeld() && beetle.atkCd <= 0) doAttack();
 
   // 飛行のキラキラ
   if (pressing && Math.random() < 0.3) {
@@ -287,8 +371,11 @@ function update(dt) {
     if (dx * dx + dy * dy < r * r) {
       it.taken = true;
       jellies++;
+      beetle.power = jellies;     // ゼリーを取るごとに強化
       sfx.collect();
+      sfx.powerup();
       burstParticles(sx, iy, '#FFB84D', 14);
+      burstParticles(beetle.x, beetle.y, '#FFE873', 16);   // クワガタが光る
     }
   }
 
@@ -365,6 +452,7 @@ function draw() {
   drawParticles();
   drawBeetle();
   drawHUD();
+  drawAttackButton();
 
   ctx.restore();
 
@@ -520,112 +608,226 @@ function drawParticles() {
   ctx.globalAlpha = 1;
 }
 
+// 大あご用のグラデーション
+function mandGrad(vs, c0, c1) {
+  const g = ctx.createLinearGradient(vs * 1.1, -vs * 0.6, vs * 2.4, vs * 0.4);
+  g.addColorStop(0, c0); g.addColorStop(1, c1);
+  return g;
+}
+// 片側の大あご（my=-1で上、+1で下）。open=あごの開き具合。
+function drawMandible(vs, my, open, fill, stroke) {
+  const o = open;
+  ctx.beginPath();
+  ctx.moveTo(vs * 1.12, my * vs * 0.05);
+  // 外側の縁：外へふくらみながら前方へ
+  ctx.quadraticCurveTo(vs * 1.75, my * vs * 0.82 * o, vs * 2.3, my * vs * 0.5 * o);
+  // 先端が内側へフックする
+  ctx.quadraticCurveTo(vs * 2.66, my * vs * 0.24 * o, vs * 2.34, my * vs * 0.04);
+  // 内側の先端
+  ctx.quadraticCurveTo(vs * 2.12, my * vs * 0.26 * o, vs * 1.96, my * vs * 0.2 * o);
+  // 内歯（中心に向かってとがる）
+  ctx.lineTo(vs * 1.82, my * vs * 0.0);
+  ctx.lineTo(vs * 1.68, my * vs * 0.24 * o);
+  // 内側の縁を付け根へ戻す
+  ctx.quadraticCurveTo(vs * 1.4, my * vs * 0.1 * o, vs * 1.12, my * vs * 0.0);
+  ctx.closePath();
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.strokeStyle = stroke; ctx.lineWidth = vs * 0.045; ctx.lineJoin = 'round'; ctx.stroke();
+}
+function drawStar(x, y, r, color) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const a = -Math.PI / 2 + i * Math.PI * 2 / 5;
+    const a2 = a + Math.PI / 5;
+    ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    ctx.lineTo(Math.cos(a2) * r * 0.45, Math.sin(a2) * r * 0.45);
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
 function drawBeetle() {
   const b = beetle;
   const s = b.size || Math.min(W, H) * 0.055;
   // 無敵中は点滅
   if (b.invincible > 0 && Math.floor(b.invincible * 10) % 2 === 0) return;
 
-  ctx.save();
-  ctx.translate(b.x, b.y);
-  ctx.rotate(b.tilt || 0);
+  const glam = Math.min(b.power | 0, 12);          // 強化レベル（見た目）
+  const grow = 1 + glam * 0.018;                    // 強化で少し大きく
+  const atk = b.atkAnim > 0 ? b.atkAnim / 0.3 : 0;  // 攻撃モーション 1→0
+  const chomp = atk > 0 ? 1 - Math.sin((1 - atk) * Math.PI) * 0.72 : 1;   // 開→閉→開
+  const lunge = atk > 0 ? Math.sin((1 - atk) * Math.PI) * s * 0.5 : 0;    // 前方へ突き出す
 
+  ctx.save();
+  ctx.translate(b.x + lunge, b.y);
+  ctx.rotate(b.tilt || 0);
+  ctx.scale(grow, grow);
+
+  const vs = s;
   const flap = Math.sin(b.wingPhase);
 
-  // 羽（うしろ・半透明）
-  ctx.fillStyle = 'rgba(255, 236, 179, 0.75)';
-  ctx.save();
-  ctx.rotate(-0.5 - flap * 0.45);
-  ctx.beginPath();
-  ctx.ellipse(-s * 0.2, -s * 0.9, s * 0.55, s * 1.05, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-  ctx.save();
-  ctx.rotate(-0.2 - flap * 0.35);
-  ctx.beginPath();
-  ctx.ellipse(s * 0.1, -s * 0.95, s * 0.5, s * 0.95, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // 脚
-  ctx.strokeStyle = '#4A2C12';
-  ctx.lineWidth = s * 0.13;
-  ctx.lineCap = 'round';
-  for (let i = 0; i < 3; i++) {
-    const lx = -s * 0.5 + i * s * 0.5;
-    ctx.beginPath();
-    ctx.moveTo(lx, s * 0.5);
-    ctx.lineTo(lx - s * 0.2, s * 0.95);
-    ctx.stroke();
+  // ---- 強化オーラ ----
+  if (glam >= 5) {
+    const aura = ctx.createRadialGradient(0, 0, vs * 1.1, 0, 0, vs * 2.7);
+    aura.addColorStop(0, glam >= 8 ? 'rgba(255,170,235,0.4)' : 'rgba(255,224,120,0.4)');
+    aura.addColorStop(1, glam >= 8 ? 'rgba(255,170,235,0)' : 'rgba(255,224,120,0)');
+    ctx.fillStyle = aura;
+    ctx.beginPath(); ctx.arc(0, 0, vs * 2.7, 0, Math.PI * 2); ctx.fill();
   }
 
-  // 胴体
-  const bodyGrad = ctx.createRadialGradient(-s * 0.2, -s * 0.3, s * 0.1, 0, 0, s * 1.4);
-  bodyGrad.addColorStop(0, '#7A4A21');
-  bodyGrad.addColorStop(1, '#3E2410');
+  // ---- 羽（半透明・後ろ） ----
+  ctx.fillStyle = 'rgba(255, 236, 179, 0.7)';
+  ctx.save(); ctx.rotate(-0.5 - flap * 0.45);
+  ctx.beginPath(); ctx.ellipse(-vs * 0.25, -vs * 0.9, vs * 0.5, vs * 1.0, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  ctx.save(); ctx.rotate(-0.2 - flap * 0.35);
+  ctx.beginPath(); ctx.ellipse(vs * 0.05, -vs * 0.95, vs * 0.46, vs * 0.9, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+
+  // ---- 脚（6本） ----
+  ctx.strokeStyle = '#160C05';
+  ctx.lineWidth = vs * 0.12;
+  ctx.lineCap = 'round';
+  for (const lx of [-vs * 0.55, -vs * 0.05, vs * 0.45]) {
+    ctx.beginPath();
+    ctx.moveTo(lx, vs * 0.45);
+    ctx.lineTo(lx - vs * 0.12, vs * 0.82);
+    ctx.lineTo(lx - vs * 0.34, vs * 1.02);
+    ctx.stroke();
+  }
+  // 前脚（前方へ）
+  ctx.beginPath();
+  ctx.moveTo(vs * 0.75, vs * 0.32);
+  ctx.lineTo(vs * 1.02, vs * 0.66);
+  ctx.lineTo(vs * 1.28, vs * 0.72);
+  ctx.stroke();
+
+  // ---- 上翅（エリトラ：細長く光沢のある平たい体） ----
+  const bodyGrad = ctx.createLinearGradient(-vs, -vs * 0.6, vs * 0.6, vs * 0.6);
+  bodyGrad.addColorStop(0, '#4A2E17');
+  bodyGrad.addColorStop(0.5, '#2A1810');
+  bodyGrad.addColorStop(1, '#150B04');
   ctx.fillStyle = bodyGrad;
   ctx.beginPath();
-  ctx.ellipse(-s * 0.15, 0, s * 1.05, s * 0.78, 0, 0, Math.PI * 2);
+  ctx.ellipse(-vs * 0.12, 0, vs * 1.18, vs * 0.64, 0, 0, Math.PI * 2);
   ctx.fill();
+  // 強化：金のふち取り
+  if (glam >= 5) {
+    ctx.strokeStyle = glam >= 8 ? '#FFD54A' : '#D9A441';
+    ctx.lineWidth = vs * 0.06;
+    ctx.beginPath();
+    ctx.ellipse(-vs * 0.12, 0, vs * 1.18, vs * 0.64, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // エリトラの合わせ目
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = vs * 0.05;
+  ctx.beginPath(); ctx.moveTo(-vs * 1.25, 0); ctx.lineTo(vs * 0.5, 0); ctx.stroke();
+  // つや
+  ctx.fillStyle = 'rgba(255,255,255,0.16)';
+  ctx.beginPath(); ctx.ellipse(-vs * 0.4, -vs * 0.28, vs * 0.55, vs * 0.15, -0.22, 0, Math.PI * 2); ctx.fill();
 
-  // 前胸
-  ctx.fillStyle = '#5C3317';
-  ctx.beginPath();
-  ctx.ellipse(s * 0.62, -s * 0.05, s * 0.5, s * 0.52, 0, 0, Math.PI * 2);
-  ctx.fill();
+  // ---- 前胸（プロノータム） ----
+  const proGrad = ctx.createLinearGradient(0, -vs * 0.5, 0, vs * 0.5);
+  proGrad.addColorStop(0, '#3A2211'); proGrad.addColorStop(1, '#150B04');
+  ctx.fillStyle = proGrad;
+  ctx.beginPath(); ctx.ellipse(vs * 0.6, 0, vs * 0.52, vs * 0.56, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.14)';
+  ctx.beginPath(); ctx.ellipse(vs * 0.5, -vs * 0.26, vs * 0.3, vs * 0.1, -0.2, 0, Math.PI * 2); ctx.fill();
 
-  // 頭
-  ctx.fillStyle = '#4A2C12';
-  ctx.beginPath();
-  ctx.ellipse(s * 1.05, -s * 0.08, s * 0.38, s * 0.4, 0, 0, Math.PI * 2);
-  ctx.fill();
+  // ---- 頭 ----
+  ctx.fillStyle = '#150B04';
+  ctx.beginPath(); ctx.ellipse(vs * 1.12, 0, vs * 0.42, vs * 0.44, 0, 0, Math.PI * 2); ctx.fill();
 
-  // 大あご（クワガタのシンボル！）先が開いたハサミ型
-  ctx.strokeStyle = '#3E2410';
-  ctx.lineWidth = s * 0.18;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(s * 1.25, -s * 0.2);
-  ctx.quadraticCurveTo(s * 1.8, -s * 0.3, s * 2.05, -s * 0.72);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(s * 1.25, s * 0.08);
-  ctx.quadraticCurveTo(s * 1.8, s * 0.18, s * 2.05, s * 0.6);
-  ctx.stroke();
-  // あごの内側のギザギザ
-  ctx.fillStyle = '#3E2410';
-  ctx.beginPath();
-  ctx.arc(s * 1.72, -s * 0.32, s * 0.1, 0, Math.PI * 2);
-  ctx.arc(s * 1.72, s * 0.2, s * 0.1, 0, Math.PI * 2);
-  ctx.fill();
+  // ---- 大あご（クワガタの象徴！ハサミ型） ----
+  let mandFill, mandStroke;
+  if (glam >= 8) { mandFill = mandGrad(vs, '#FFF3B0', '#E8A417'); mandStroke = '#8A5E00'; }
+  else if (glam >= 1) { mandFill = mandGrad(vs, '#EBC65E', '#A9770C'); mandStroke = '#6E4A00'; }
+  else { mandFill = mandGrad(vs, '#5A3A1E', '#241206'); mandStroke = '#0E0702'; }
+  drawMandible(vs, -1, chomp, mandFill, mandStroke);
+  drawMandible(vs, 1, chomp, mandFill, mandStroke);
 
-  // 目（かわいく大きく）
+  // ---- 目 ----
   ctx.fillStyle = '#FFF';
-  ctx.beginPath();
-  ctx.arc(s * 1.02, -s * 0.18, s * 0.17, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#222';
-  ctx.beginPath();
-  ctx.arc(s * 1.07, -s * 0.16, s * 0.09, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.beginPath(); ctx.arc(vs * 1.1, -vs * 0.12, vs * 0.16, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#161616';
+  ctx.beginPath(); ctx.arc(vs * 1.15, -vs * 0.1, vs * 0.09, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#FFF';
-  ctx.beginPath();
-  ctx.arc(s * 1.1, -s * 0.2, s * 0.035, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.beginPath(); ctx.arc(vs * 1.19, -vs * 0.14, vs * 0.035, 0, Math.PI * 2); ctx.fill();
 
-  // ほっぺ
-  ctx.fillStyle = 'rgba(255, 150, 150, 0.5)';
-  ctx.beginPath();
-  ctx.arc(s * 0.95, s * 0.12, s * 0.09, 0, Math.PI * 2);
-  ctx.fill();
+  // ---- 王冠（強化 tier3+） ----
+  if (glam >= 3) {
+    const cx = vs * 0.5, cy = -vs * 0.66, cw = vs * 0.8;
+    ctx.fillStyle = '#FFD54A';
+    ctx.beginPath();
+    ctx.moveTo(cx - cw / 2, cy);
+    ctx.lineTo(cx - cw / 2, cy - vs * 0.3);
+    ctx.lineTo(cx - cw * 0.22, cy - vs * 0.04);
+    ctx.lineTo(cx, cy - vs * 0.34);
+    ctx.lineTo(cx + cw * 0.22, cy - vs * 0.04);
+    ctx.lineTo(cx + cw / 2, cy - vs * 0.3);
+    ctx.lineTo(cx + cw / 2, cy);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#FF5B6E';
+    ctx.beginPath(); ctx.arc(cx, cy - vs * 0.06, vs * 0.07, 0, Math.PI * 2); ctx.fill();
+  }
 
-  // 背中のツヤ
-  ctx.fillStyle = 'rgba(255,255,255,0.18)';
-  ctx.beginPath();
-  ctx.ellipse(-s * 0.3, -s * 0.3, s * 0.5, s * 0.22, -0.3, 0, Math.PI * 2);
-  ctx.fill();
+  // ---- 星のキラキラ（最上位 tier8+） ----
+  if (glam >= 8) {
+    for (let i = 0; i < 3; i++) {
+      const a = stateTimer * 2.2 + i * Math.PI * 2 / 3;
+      drawStar(Math.cos(a) * vs * 1.9, Math.sin(a) * vs * 1.3, vs * 0.2, '#FFF3A0');
+    }
+  }
+
+  // ---- 攻撃の衝撃波（前方） ----
+  if (atk > 0) {
+    const prog = 1 - atk;
+    ctx.globalAlpha = Math.max(0, atk * 0.9);
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = vs * 0.16;
+    ctx.beginPath();
+    ctx.arc(vs * 2.1, 0, vs * (0.7 + prog * 1.5), -1.0, 1.0);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
 
   ctx.restore();
+}
+
+function drawAttackButton() {
+  if (state !== STATE.PLAY) return;
+  const b = attackButton();
+  const held = attackHeld();
+  const ready = beetle.atkCd <= 0;
+  // 影
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.beginPath(); ctx.arc(b.x, b.y + b.r * 0.08, b.r, 0, Math.PI * 2); ctx.fill();
+  // 本体
+  const g = ctx.createRadialGradient(b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.2, b.x, b.y, b.r);
+  g.addColorStop(0, ready ? '#FF9A8A' : '#C79088');
+  g.addColorStop(1, ready ? '#E8433B' : '#9A5C57');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r * (held ? 0.92 : 1), 0, Math.PI * 2); ctx.fill();
+  // ふち
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = b.r * 0.08;
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 0.98, 0, Math.PI * 2); ctx.stroke();
+  // アイコン
+  ctx.font = `${b.r * 0.95}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('💥', b.x, b.y - b.r * 0.08);
+  // ラベル
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${b.r * 0.4}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
+  ctx.fillText('こわす', b.x, b.y + b.r * 0.52);
+  // クールダウンのリング
+  if (!ready) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = b.r * 0.12;
+    ctx.beginPath();
+    const frac = 1 - beetle.atkCd / 0.42;
+    ctx.arc(b.x, b.y, b.r * 0.72, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+    ctx.stroke();
+  }
 }
 
 function drawHUD() {
@@ -731,6 +933,7 @@ function drawTitle() {
   bigText('がめんを タッチしてね！', H * 0.72, base * 0.055, '#FFF', '#E8743B');
   ctx.restore();
   bigText('おしてるあいだ うえにとぶよ', H * 0.83, base * 0.038, '#5C3317', '#FFF');
+  bigText('ひだりの ボタンで こわせる！', H * 0.89, base * 0.038, '#5C3317', '#FFF');
 }
 
 function drawGoal() {
@@ -794,6 +997,21 @@ function loop(t) {
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
+
+// 開発時の動作確認用（?debug 付きURLのときだけ有効）
+if (typeof location !== 'undefined' && location.search.indexOf('debug') >= 0) {
+  window.__kuwagata = {
+    beetle,
+    doAttack,
+    play() { resetGame(); state = STATE.PLAY; stateTimer = 1; },
+    setPower(n) { jellies = n; beetle.power = n; },
+    addObstacleAhead() {
+      obstacles.push({ x: scrollX + beetle.x + beetle.size * 3, type: 'bottom', h: H * 0.3, w: Math.max(W, H) * 0.055, passed: false });
+    },
+    get state() { return state; },
+    get obstacleCount() { return obstacles.length; }
+  };
+}
 
 })();
 </script>

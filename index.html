@@ -277,7 +277,7 @@ const UPGRADES = [
   { id: 'laser', name: 'レーザー', icon: '⚡', desc: 'つらぬく ビーム', weapon: true },
   { id: 'bomb', name: 'ばくだん', icon: '💣', desc: 'ばくはつ こうげき', weapon: true },
   { id: 'spread', name: 'さんだん', icon: '✳️', desc: 'いっぱい とばす', weapon: true },
-  { id: 'rapid', name: 'れんしゃ', icon: '🔥', desc: 'はやく うてる' },
+  { id: 'flame', name: 'ほのお', icon: '🔥', desc: 'めらめら こうげき', weapon: true },
   { id: 'friend', name: 'なかま', icon: '🐞', desc: 'なかまが ふえる' },
   { id: 'heal', name: 'かいふく', icon: '💗', desc: 'ハートが かいふく' }
 ];
@@ -291,7 +291,7 @@ const beetle = {
   invincible: 0,    // 無敵時間（秒）
   tilt: 0,
   atkCd: 0,         // 攻撃のクールダウン（秒）
-  atkCdBase: 0.42,  // クールダウンの基準（れんしゃで短縮）
+  atkCdBase: 0.42,  // 攻撃のクールダウンの基準
   atkAnim: 0,       // 攻撃モーションの残り時間（秒）
   power: 0,         // 見た目の強化レベル（レベルアップ回数）
   weapons: { normal: 1 }  // 武器ごとのレベル（選ぶたびに加算される）
@@ -460,17 +460,22 @@ function fireShot(x, y, side, dmg, color, pierce, opts) {
     let sp = base;
     if (kind === 'laser') sp = base * 1.9;
     else if (kind === 'bomb') sp = base * 0.55;
+    else if (kind === 'flame') sp = base * 0.55;       // 炎は短射程
     vx = Math.cos(ang) * sp; vy = Math.sin(ang) * sp;
     if (kind === 'bomb') vy -= H * 0.32;               // 山なりに投げる
   } else { vx = -base; }
   let r = beetle.size * 0.34;
-  if (side === 'player') r = beetle.size * (kind === 'bomb' ? 0.55 : kind === 'laser' ? 0.32 : 0.4 + Math.min(level, 12) * 0.02);
+  if (side === 'player') r = beetle.size * (kind === 'bomb' ? 0.55 : kind === 'laser' ? 0.32 : kind === 'flame' ? 0.5 : 0.4 + Math.min(level, 12) * 0.02);
   shots.push({
     x, y, r, vx, vy, side, dmg,
     color: color || (side === 'player' ? '#FFE873' : '#FF5B6E'),
-    spin: 0, pierce: pierce || 1, kind, fuse: kind === 'bomb' ? 0.85 : 0
+    spin: 0, pierce: pierce || 1, kind,
+    fuse: kind === 'bomb' ? 0.85 : 0,
+    life: kind === 'flame' ? 0.34 : 0,                 // 炎は短時間で消える＝短射程
+    grow: kind === 'flame' ? 1 + Math.random() * 0.5 : 1,
+    flick: Math.random() * 6
   });
-  if (side === 'player') burstParticles(x, y, '#FFF3B0', 4);
+  if (side === 'player' && kind !== 'flame') burstParticles(x, y, '#FFF3B0', 4);
 }
 
 // 爆発（爆弾）：まわりの敵・障害物・敵弾・ボスにダメージ
@@ -506,6 +511,11 @@ function fireWeapon(id, lv, ox, oy, dmg) {
   } else if (id === 'bomb') {
     const n = Math.min(lv, 3);
     for (let i = 0; i < n; i++) fireShot(ox, oy, 'player', dmg + lv, '#FF9A3B', 1, { kind: 'bomb', angle: (i - (n - 1) / 2) * 0.18 });
+  } else if (id === 'flame') {
+    // 炎：前方に炎の粒をめらめらと噴き出す（短射程・貫通）
+    const n = 4 + lv * 2;
+    for (let i = 0; i < n; i++) fireShot(ox, oy, 'player', dmg, '#FF7A2B', 2 + lv, { kind: 'flame', angle: (Math.random() - 0.5) * 0.55 });
+    burstParticles(ox, oy, '#FFD24D', 4);
   } else {
     // ノーマル：レベルぶん平行に発射
     for (let i = 0; i < lv; i++) fireShot(ox, oy + (i - (lv - 1) / 2) * beetle.size * 0.7, 'player', dmg, '#FFE873', 1);
@@ -741,7 +751,6 @@ function triggerLevelUp() {
 }
 function applyUpgrade(u) {
   if (u.weapon) beetle.weapons[u.id] = (beetle.weapons[u.id] || 0) + 1;   // 武器を加算
-  else if (u.id === 'rapid') beetle.atkCdBase = Math.max(0.16, beetle.atkCdBase * 0.78);
   else if (u.id === 'friend') addCompanion();
   else if (u.id === 'heal') hearts = Math.min(MAX_HEARTS, hearts + 2);
   levelChoices = [];
@@ -880,6 +889,7 @@ function updateShots(dt) {
   // 移動＆画面外判定（爆弾は山なり＆時限式）
   for (const s of shots) {
     if (s.kind === 'bomb') { s.vy += H * 0.9 * dt; s.fuse -= dt; }
+    if (s.kind === 'flame') { s.life -= dt; s.grow += dt * 2.5; if (s.life <= 0) s.dead = true; }   // 炎は短時間で消える
     s.x += s.vx * dt; s.y += s.vy * dt; s.spin += dt * 12;
     if (s.x < -80 || s.x > W + 80 || s.y < -80 || s.y > H + 80) s.dead = true;
   }
@@ -1509,6 +1519,17 @@ function drawShots() {
       ctx.beginPath(); ctx.moveTo(0, -s.r); ctx.quadraticCurveTo(s.r * 0.5, -s.r * 1.5, s.r * 0.2, -s.r * 1.8); ctx.stroke();
       ctx.fillStyle = Math.sin(s.spin * 3) > 0 ? '#FFD24D' : '#FF6B2B';
       ctx.beginPath(); ctx.arc(s.r * 0.2, -s.r * 1.9, s.r * 0.28, 0, Math.PI * 2); ctx.fill();
+    } else if (s.side === 'player' && s.kind === 'flame') {
+      // 炎（めらめら揺れる炎の粒）
+      const rr = s.r * (s.grow || 1);
+      const fl = 1 + Math.sin(s.flick + s.spin * 2) * 0.15;
+      const g = ctx.createRadialGradient(0, 0, rr * 0.15, 0, 0, rr * 1.5 * fl);
+      g.addColorStop(0, 'rgba(255,255,220,0.95)');
+      g.addColorStop(0.4, '#FFC22B');
+      g.addColorStop(0.75, '#FF6B2B');
+      g.addColorStop(1, 'rgba(220,50,20,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(0, 0, rr * 1.5 * fl, 0, Math.PI * 2); ctx.fill();
     } else if (s.side === 'player') {
       // 光の弾（通常・散弾）
       const g = ctx.createRadialGradient(0, 0, s.r * 0.2, 0, 0, s.r * 1.4);
@@ -1891,9 +1912,9 @@ function drawBoss() {
 
 // 持っている武器のコンパクト表示（例：「⚡2 💣1」）
 function weaponSummary() {
-  const ic = { laser: '⚡', bomb: '💣', spread: '✳️' };
+  const ic = { laser: '⚡', bomb: '💣', spread: '✳️', flame: '🔥' };
   const parts = [];
-  for (const id of ['laser', 'bomb', 'spread']) { const lv = beetle.weapons[id] || 0; if (lv > 0) parts.push(ic[id] + lv); }
+  for (const id of ['laser', 'bomb', 'spread', 'flame']) { const lv = beetle.weapons[id] || 0; if (lv > 0) parts.push(ic[id] + lv); }
   return parts.join(' ');
 }
 function drawHUD() {

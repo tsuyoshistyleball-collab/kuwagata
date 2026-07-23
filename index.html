@@ -561,23 +561,23 @@ function drawBeetle() {
   ctx.ellipse(s * 1.05, -s * 0.08, s * 0.38, s * 0.4, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // 大あご（クワガタのシンボル！）
+  // 大あご（クワガタのシンボル！）先が開いたハサミ型
   ctx.strokeStyle = '#3E2410';
   ctx.lineWidth = s * 0.18;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(s * 1.25, -s * 0.22);
-  ctx.quadraticCurveTo(s * 1.9, -s * 0.55, s * 2.05, -s * 0.15);
+  ctx.moveTo(s * 1.25, -s * 0.2);
+  ctx.quadraticCurveTo(s * 1.8, -s * 0.3, s * 2.05, -s * 0.72);
   ctx.stroke();
   ctx.beginPath();
-  ctx.moveTo(s * 1.25, s * 0.1);
-  ctx.quadraticCurveTo(s * 1.9, s * 0.4, s * 2.05, s * 0.0);
+  ctx.moveTo(s * 1.25, s * 0.08);
+  ctx.quadraticCurveTo(s * 1.8, s * 0.18, s * 2.05, s * 0.6);
   ctx.stroke();
-  // あごのギザギザ
+  // あごの内側のギザギザ
   ctx.fillStyle = '#3E2410';
   ctx.beginPath();
-  ctx.arc(s * 1.68, -s * 0.42, s * 0.09, 0, Math.PI * 2);
-  ctx.arc(s * 1.68, s * 0.28, s * 0.09, 0, Math.PI * 2);
+  ctx.arc(s * 1.72, -s * 0.32, s * 0.1, 0, Math.PI * 2);
+  ctx.arc(s * 1.72, s * 0.2, s * 0.1, 0, Math.PI * 2);
   ctx.fill();
 
   // 目（かわいく大きく）
@@ -613,6 +613,11 @@ function drawHUD() {
   if (state !== STATE.PLAY && state !== STATE.GOAL && state !== STATE.RETRY) return;
   const pad = Math.min(W, H) * 0.03;
   const hs = Math.min(W, H) * 0.04;
+
+  // HUDの下地（障害物と重なっても見やすいように）
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  roundRect(pad * 0.4, pad * 0.4, hs * 2.3 * MAX_HEARTS + pad, hs * 4.4, hs * 0.6);
+  ctx.fill();
 
   // ハート
   for (let i = 0; i < MAX_HEARTS; i++) {

@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#87CEEB">
+<title>クワガタ フライング！</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    background: #87CEEB;
+    position: fixed;
+  }
+  #game {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+(() => {
+'use strict';
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * DPR;
+  canvas.height = H * DPR;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 300));
+resize();
+
+// ---------- サウンド ----------
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  }
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+function beep(freq, dur, type, vol, delay) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime + (delay || 0);
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type || 'sine';
+  osc.frequency.setValueAtTime(freq, t);
+  gain.gain.setValueAtTime(vol || 0.15, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(t); osc.stop(t + dur);
+}
+const sfx = {
+  collect() { beep(880, 0.12, 'sine', 0.18); beep(1320, 0.18, 'sine', 0.15, 0.08); },
+  hit() { beep(160, 0.25, 'square', 0.12); beep(110, 0.3, 'square', 0.1, 0.08); },
+  goal() {
+    [523, 659, 784, 1047, 1319].forEach((f, i) => beep(f, 0.35, 'triangle', 0.18, i * 0.15));
+  },
+  start() { beep(660, 0.1, 'sine', 0.15); beep(880, 0.15, 'sine', 0.15, 0.1); },
+  heart() { beep(440, 0.15, 'triangle', 0.12); }
+};
+
+// ---------- ゲーム状態 ----------
+const STATE = { TITLE: 0, PLAY: 1, GOAL: 2, RETRY: 3 };
+let state = STATE.TITLE;
+let pressing = false;
+
+const beetle = {
+  x: 0, y: 0, vy: 0,
+  size: 0,          // 半径ベース
+  wingPhase: 0,
+  invincible: 0,    // 無敵時間（秒）
+  tilt: 0
+};
+
+let scrollX = 0;         // 進んだ距離
+let goalDist = 0;        // ゴールまでの距離
+let speed = 0;           // スクロール速度 px/s
+let hearts = 5;
+const MAX_HEARTS = 5;
+let jellies = 0;
+let obstacles = [];      // {x, type, h, w, passed}
+let items = [];          // {x, y, taken, bob}
+let clouds = [];
+let trees = [];
+let particles = [];
+let confetti = [];
+let shake = 0;
+let goalTimer = 0;
+let stateTimer = 0;
+
+function courseSetup() {
+  speed = Math.max(W, H) * 0.20;          // 画面サイズに応じたやさしい速度
+  const spacing = speed * 3.0;             // 障害物の間隔（約3秒ごと）
+  const count = 18;                        // 障害物の数
+  goalDist = spacing * (count + 2);
+
+  obstacles = [];
+  items = [];
+  for (let i = 0; i < count; i++) {
+    const x = spacing * (i + 2);
+    const type = Math.random() < 0.5 ? 'top' : 'bottom';
+    // 障害物の長さ：通れるすき間を画面の55%以上残す
+    const h = H * (0.18 + Math.random() * 0.22);
+    obstacles.push({ x, type, h, w: Math.max(W, H) * 0.055, passed: false });
+    // 障害物の間にゼリーを置く
+    if (i < count - 1) {
+      const ix = x + spacing * 0.5;
+      const safeTop = H * 0.2, safeBottom = H * 0.75;
+      const iy = safeTop + Math.random() * (safeBottom - safeTop);
+      items.push({ x: ix, y: iy, taken: false, bob: Math.random() * Math.PI * 2 });
+    }
+  }
+
+  clouds = [];
+  for (let i = 0; i < 6; i++) {
+    clouds.push({ x: Math.random() * W * 2, y: H * (0.05 + Math.random() * 0.3), s: 0.5 + Math.random() * 0.8 });
+  }
+  trees = [];
+  for (let i = 0; i < 14; i++) {
+    trees.push({ x: Math.random() * W * 3, s: 0.6 + Math.random() * 0.7 });
+  }
+}
+
+function resetGame() {
+  scrollX = 0;
+  hearts = MAX_HEARTS;
+  jellies = 0;
+  beetle.x = W * 0.24;
+  beetle.y = H * 0.45;
+  beetle.vy = 0;
+  beetle.size = Math.min(W, H) * 0.055;
+  beetle.invincible = 0;
+  particles = [];
+  confetti = [];
+  shake = 0;
+  courseSetup();
+}
+
+// ---------- 入力 ----------
+function pressStart(e) {
+  if (e) e.preventDefault();
+  initAudio();
+  pressing = true;
+  if (state === STATE.TITLE || state === STATE.GOAL || state === STATE.RETRY) {
+    if (stateTimer > 0.6) {   // 誤タップ防止に少し待つ
+      resetGame();
+      state = STATE.PLAY;
+      sfx.start();
+      pressing = false;
+    }
+  }
+}
+function pressEnd(e) {
+  if (e) e.preventDefault();
+  pressing = false;
+}
+canvas.addEventListener('touchstart', pressStart, { passive: false });
+canvas.addEventListener('touchend', pressEnd, { passive: false });
+canvas.addEventListener('touchcancel', pressEnd, { passive: false });
+canvas.addEventListener('mousedown', pressStart);
+window.addEventListener('mouseup', pressEnd);
+window.addEventListener('keydown', (e) => { if (e.code === 'Space') pressStart(); });
+window.addEventListener('keyup', (e) => { if (e.code === 'Space') pressEnd(); });
+
+// ---------- 更新 ----------
+function update(dt) {
+  stateTimer += dt;
+  beetle.wingPhase += dt * (pressing ? 40 : 18);
+
+  if (state !== STATE.PLAY) {
+    // タイトル画面などではふわふわ浮かぶ
+    beetle.y = H * 0.42 + Math.sin(stateTimer * 2) * H * 0.02;
+    updateDecor(dt, 0.3);
+    updateParticles(dt);
+    updateConfetti(dt);
+    return;
+  }
+
+  // 飛行の物理：押している間は上昇、離すと下降
+  const up = H * 1.15;      // 上昇加速度
+  const gravity = H * 0.95; // 重力
+  if (pressing) beetle.vy -= up * dt;
+  else beetle.vy += gravity * dt;
+  const vmax = H * 0.55;
+  beetle.vy = Math.max(-vmax, Math.min(vmax, beetle.vy));
+  beetle.y += beetle.vy * dt;
+  beetle.tilt = beetle.vy / vmax * 0.4;
+
+  // 画面の上下では止まる（落ちてもミスにならない・やさしい設計）
+  const groundY = H * 0.88;
+  if (beetle.y < beetle.size * 1.2) { beetle.y = beetle.size * 1.2; beetle.vy = Math.max(0, beetle.vy); }
+  if (beetle.y > groundY - beetle.size) { beetle.y = groundY - beetle.size; beetle.vy = Math.min(0, beetle.vy); }
+
+  // スクロール
+  scrollX += speed * dt;
+  updateDecor(dt, 1);
+
+  if (beetle.invincible > 0) beetle.invincible -= dt;
+  if (shake > 0) shake -= dt * 3;
+
+  // 飛行のキラキラ
+  if (pressing && Math.random() < 0.3) {
+    particles.push({
+      x: beetle.x - beetle.size, y: beetle.y + beetle.size * 0.5,
+      vx: -60 - Math.random() * 60, vy: 30 + Math.random() * 50,
+      life: 0.5, maxLife: 0.5, color: '#FFF8B0', r: 3 + Math.random() * 3
+    });
+  }
+
+  // 障害物との当たり判定（ゆるめ：見た目より小さい判定）
+  const hitR = beetle.size * 0.62;
+  for (const ob of obstacles) {
+    const sx = ob.x - scrollX;
+    if (sx < -ob.w * 2 || sx > W + ob.w) continue;
+    let ox0 = sx - ob.w / 2, ox1 = sx + ob.w / 2;
+    let oy0, oy1;
+    if (ob.type === 'top') { oy0 = 0; oy1 = ob.h; }
+    else { oy0 = groundY - ob.h; oy1 = groundY; }
+    // 円と矩形の判定
+    const cx = Math.max(ox0, Math.min(beetle.x, ox1));
+    const cy = Math.max(oy0, Math.min(beetle.y, oy1));
+    const dx = beetle.x - cx, dy = beetle.y - cy;
+    if (dx * dx + dy * dy < hitR * hitR && beetle.invincible <= 0) {
+      hearts--;
+      beetle.invincible = 2.0;
+      shake = 1;
+      sfx.hit();
+      beetle.vy = ob.type === 'top' ? H * 0.3 : -H * 0.3;
+      burstParticles(beetle.x, beetle.y, '#FF8888', 12);
+      if (hearts <= 0) {
+        state = STATE.RETRY;
+        stateTimer = 0;
+      }
+    }
+  }
+
+  // ゼリー取得
+  for (const it of items) {
+    if (it.taken) continue;
+    it.bob += dt * 3;
+    const sx = it.x - scrollX;
+    if (sx < -50 || sx > W + 50) continue;
+    const iy = it.y + Math.sin(it.bob) * 8;
+    const dx = beetle.x - sx, dy = beetle.y - iy;
+    const r = beetle.size + Math.min(W, H) * 0.035;
+    if (dx * dx + dy * dy < r * r) {
+      it.taken = true;
+      jellies++;
+      sfx.collect();
+      burstParticles(sx, iy, '#FFB84D', 14);
+    }
+  }
+
+  // ゴール判定
+  if (scrollX >= goalDist) {
+    state = STATE.GOAL;
+    stateTimer = 0;
+    goalTimer = 0;
+    sfx.goal();
+    for (let i = 0; i < 80; i++) spawnConfetti();
+  }
+
+  updateParticles(dt);
+}
+
+function updateDecor(dt, mul) {
+  for (const c of clouds) {
+    c.x -= speed * 0.15 * c.s * dt * mul;
+    if (c.x < -200) { c.x = W + 200; c.y = H * (0.05 + Math.random() * 0.3); }
+  }
+  for (const t of trees) {
+    t.x -= speed * 0.45 * t.s * dt * mul;
+    if (t.x < -150) { t.x = W + 150 + Math.random() * 200; }
+  }
+}
+
+function burstParticles(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 60 + Math.random() * 180;
+    particles.push({
+      x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: 0.6, maxLife: 0.6, color, r: 3 + Math.random() * 4
+    });
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vy += 300 * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+function spawnConfetti() {
+  confetti.push({
+    x: Math.random() * W, y: -20 - Math.random() * H,
+    vy: 80 + Math.random() * 120, vx: -40 + Math.random() * 80,
+    r: 4 + Math.random() * 6, rot: Math.random() * Math.PI * 2, vr: -4 + Math.random() * 8,
+    color: ['#FF6B6B', '#FFD93D', '#6BCB77', '#4D96FF', '#FF9F45', '#C780FA'][Math.floor(Math.random() * 6)]
+  });
+}
+function updateConfetti(dt) {
+  for (const c of confetti) {
+    c.y += c.vy * dt;
+    c.x += c.vx * dt + Math.sin(c.y * 0.02) * 1.5;
+    c.rot += c.vr * dt;
+    if (c.y > H + 20) { c.y = -20; c.x = Math.random() * W; }
+  }
+}
+
+// ---------- 描画 ----------
+function draw() {
+  ctx.save();
+  if (shake > 0) {
+    ctx.translate((Math.random() - 0.5) * shake * 10, (Math.random() - 0.5) * shake * 10);
+  }
+
+  drawBackground();
+  drawObstacles();
+  drawItems();
+  drawGoalFlag();
+  drawParticles();
+  drawBeetle();
+  drawHUD();
+
+  ctx.restore();
+
+  if (state === STATE.TITLE) drawTitle();
+  else if (state === STATE.GOAL) drawGoal();
+  else if (state === STATE.RETRY) drawRetry();
+
+  drawConfettiLayer();
+}
+
+function drawBackground() {
+  // 空
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#7EC8F0');
+  sky.addColorStop(0.7, '#BDE8FF');
+  sky.addColorStop(1, '#E8F9E8');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // 太陽
+  ctx.fillStyle = '#FFE873';
+  ctx.beginPath();
+  ctx.arc(W * 0.85, H * 0.13, Math.min(W, H) * 0.07, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 雲
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  for (const c of clouds) {
+    const s = c.s * Math.min(W, H) * 0.05;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, s, 0, Math.PI * 2);
+    ctx.arc(c.x + s * 0.9, c.y - s * 0.3, s * 0.8, 0, Math.PI * 2);
+    ctx.arc(c.x + s * 1.8, c.y, s * 0.9, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 遠くの木々
+  const groundY = H * 0.88;
+  for (const t of trees) {
+    const s = t.s * Math.min(W, H) * 0.09;
+    ctx.fillStyle = t.s > 1 ? '#4C9A50' : '#6DBB6F';
+    ctx.beginPath();
+    ctx.moveTo(t.x, groundY - s * 2.4);
+    ctx.lineTo(t.x - s, groundY);
+    ctx.lineTo(t.x + s, groundY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#8B5A2B';
+    ctx.fillRect(t.x - s * 0.12, groundY - s * 0.2, s * 0.24, s * 0.2);
+  }
+
+  // 地面
+  ctx.fillStyle = '#7BC47F';
+  ctx.fillRect(0, groundY, W, H - groundY);
+  ctx.fillStyle = '#5FAE63';
+  const off = -(scrollX * 0.9) % 60;
+  for (let x = off; x < W + 60; x += 60) {
+    ctx.beginPath();
+    ctx.arc(x, groundY + 4, 20, Math.PI, 0);
+    ctx.fill();
+  }
+}
+
+function drawObstacles() {
+  const groundY = H * 0.88;
+  for (const ob of obstacles) {
+    const sx = ob.x - scrollX;
+    if (sx < -ob.w * 3 || sx > W + ob.w * 3) continue;
+    if (ob.type === 'top') {
+      // 上から垂れる木の枝＋葉っぱ
+      ctx.fillStyle = '#8B5A2B';
+      roundRect(sx - ob.w / 2, -10, ob.w, ob.h + 10, ob.w * 0.3);
+      ctx.fill();
+      ctx.fillStyle = '#5B9E4D';
+      ctx.beginPath();
+      ctx.arc(sx, ob.h, ob.w * 0.95, 0, Math.PI * 2);
+      ctx.arc(sx - ob.w * 0.8, ob.h - ob.w * 0.5, ob.w * 0.7, 0, Math.PI * 2);
+      ctx.arc(sx + ob.w * 0.8, ob.h - ob.w * 0.5, ob.w * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // 下から生えるキノコ
+      const capR = ob.w * 1.15;
+      ctx.fillStyle = '#F5E6C8';
+      roundRect(sx - ob.w / 2, groundY - ob.h + capR * 0.4, ob.w, ob.h, ob.w * 0.3);
+      ctx.fill();
+      ctx.fillStyle = '#E85D5D';
+      ctx.beginPath();
+      ctx.arc(sx, groundY - ob.h + capR * 0.55, capR, Math.PI, 0);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath();
+      ctx.arc(sx - capR * 0.4, groundY - ob.h + capR * 0.25, capR * 0.16, 0, Math.PI * 2);
+      ctx.arc(sx + capR * 0.35, groundY - ob.h + capR * 0.32, capR * 0.13, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawItems() {
+  const s = Math.min(W, H) * 0.032;
+  for (const it of items) {
+    if (it.taken) continue;
+    const sx = it.x - scrollX;
+    if (sx < -60 || sx > W + 60) continue;
+    const iy = it.y + Math.sin(it.bob) * 8;
+    // 昆虫ゼリー（カップ）
+    ctx.fillStyle = '#FFB84D';
+    ctx.beginPath();
+    ctx.moveTo(sx - s, iy - s * 0.6);
+    ctx.lineTo(sx + s, iy - s * 0.6);
+    ctx.lineTo(sx + s * 0.75, iy + s * 0.8);
+    ctx.lineTo(sx - s * 0.75, iy + s * 0.8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#FFE0A3';
+    ctx.beginPath();
+    ctx.ellipse(sx, iy - s * 0.6, s, s * 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // キラッ
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.beginPath();
+    ctx.arc(sx - s * 0.35, iy, s * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawGoalFlag() {
+  const sx = goalDist - scrollX + W * 0.5;
+  if (sx > W + 100) return;
+  const groundY = H * 0.88;
+  const poleH = H * 0.5;
+  ctx.fillStyle = '#888';
+  ctx.fillRect(sx - 4, groundY - poleH, 8, poleH);
+  // チェック旗
+  const fw = Math.min(W, H) * 0.18, fh = fw * 0.62;
+  const n = 4;
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < n; c++) {
+      ctx.fillStyle = (r + c) % 2 === 0 ? '#333' : '#FFF';
+      ctx.fillRect(sx + 4 + c * fw / n, groundY - poleH + r * fh / 3, fw / n, fh / 3);
+    }
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawBeetle() {
+  const b = beetle;
+  const s = b.size || Math.min(W, H) * 0.055;
+  // 無敵中は点滅
+  if (b.invincible > 0 && Math.floor(b.invincible * 10) % 2 === 0) return;
+
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  ctx.rotate(b.tilt || 0);
+
+  const flap = Math.sin(b.wingPhase);
+
+  // 羽（うしろ・半透明）
+  ctx.fillStyle = 'rgba(255, 236, 179, 0.75)';
+  ctx.save();
+  ctx.rotate(-0.5 - flap * 0.45);
+  ctx.beginPath();
+  ctx.ellipse(-s * 0.2, -s * 0.9, s * 0.55, s * 1.05, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.rotate(-0.2 - flap * 0.35);
+  ctx.beginPath();
+  ctx.ellipse(s * 0.1, -s * 0.95, s * 0.5, s * 0.95, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 脚
+  ctx.strokeStyle = '#4A2C12';
+  ctx.lineWidth = s * 0.13;
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 3; i++) {
+    const lx = -s * 0.5 + i * s * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(lx, s * 0.5);
+    ctx.lineTo(lx - s * 0.2, s * 0.95);
+    ctx.stroke();
+  }
+
+  // 胴体
+  const bodyGrad = ctx.createRadialGradient(-s * 0.2, -s * 0.3, s * 0.1, 0, 0, s * 1.4);
+  bodyGrad.addColorStop(0, '#7A4A21');
+  bodyGrad.addColorStop(1, '#3E2410');
+  ctx.fillStyle = bodyGrad;
+  ctx.beginPath();
+  ctx.ellipse(-s * 0.15, 0, s * 1.05, s * 0.78, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 前胸
+  ctx.fillStyle = '#5C3317';
+  ctx.beginPath();
+  ctx.ellipse(s * 0.62, -s * 0.05, s * 0.5, s * 0.52, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 頭
+  ctx.fillStyle = '#4A2C12';
+  ctx.beginPath();
+  ctx.ellipse(s * 1.05, -s * 0.08, s * 0.38, s * 0.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 大あご（クワガタのシンボル！）
+  ctx.strokeStyle = '#3E2410';
+  ctx.lineWidth = s * 0.18;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(s * 1.25, -s * 0.22);
+  ctx.quadraticCurveTo(s * 1.9, -s * 0.55, s * 2.05, -s * 0.15);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(s * 1.25, s * 0.1);
+  ctx.quadraticCurveTo(s * 1.9, s * 0.4, s * 2.05, s * 0.0);
+  ctx.stroke();
+  // あごのギザギザ
+  ctx.fillStyle = '#3E2410';
+  ctx.beginPath();
+  ctx.arc(s * 1.68, -s * 0.42, s * 0.09, 0, Math.PI * 2);
+  ctx.arc(s * 1.68, s * 0.28, s * 0.09, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 目（かわいく大きく）
+  ctx.fillStyle = '#FFF';
+  ctx.beginPath();
+  ctx.arc(s * 1.02, -s * 0.18, s * 0.17, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#222';
+  ctx.beginPath();
+  ctx.arc(s * 1.07, -s * 0.16, s * 0.09, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#FFF';
+  ctx.beginPath();
+  ctx.arc(s * 1.1, -s * 0.2, s * 0.035, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ほっぺ
+  ctx.fillStyle = 'rgba(255, 150, 150, 0.5)';
+  ctx.beginPath();
+  ctx.arc(s * 0.95, s * 0.12, s * 0.09, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 背中のツヤ
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.beginPath();
+  ctx.ellipse(-s * 0.3, -s * 0.3, s * 0.5, s * 0.22, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawHUD() {
+  if (state !== STATE.PLAY && state !== STATE.GOAL && state !== STATE.RETRY) return;
+  const pad = Math.min(W, H) * 0.03;
+  const hs = Math.min(W, H) * 0.04;
+
+  // ハート
+  for (let i = 0; i < MAX_HEARTS; i++) {
+    drawHeart(pad + hs + i * hs * 2.3, pad + hs, hs, i < hearts ? '#FF5B6E' : 'rgba(0,0,0,0.15)');
+  }
+
+  // ゼリー数
+  const jx = pad + hs, jy = pad + hs * 3.2;
+  ctx.fillStyle = '#FFB84D';
+  ctx.beginPath();
+  ctx.moveTo(jx - hs * 0.7, jy - hs * 0.4);
+  ctx.lineTo(jx + hs * 0.7, jy - hs * 0.4);
+  ctx.lineTo(jx + hs * 0.5, jy + hs * 0.6);
+  ctx.lineTo(jx - hs * 0.5, jy + hs * 0.6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#5C3317';
+  ctx.font = `bold ${hs * 1.5}px sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('× ' + jellies, jx + hs * 1.2, jy + hs * 0.1);
+
+  // 進捗バー
+  const bw = W * 0.5, bh = Math.min(W, H) * 0.02;
+  const bx = W / 2 - bw / 2, by = pad + bh;
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  roundRect(bx, by, bw, bh, bh / 2);
+  ctx.fill();
+  const prog = Math.min(1, scrollX / goalDist);
+  ctx.fillStyle = '#6BCB77';
+  roundRect(bx, by, Math.max(bh, bw * prog), bh, bh / 2);
+  ctx.fill();
+  // 旗アイコン
+  ctx.font = `${bh * 2.2}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('🏁', bx + bw + bh * 1.8, by + bh * 0.6);
+  // 進捗マーカー（ミニクワガタの代わりに丸）
+  ctx.fillStyle = '#4A2C12';
+  ctx.beginPath();
+  ctx.arc(bx + bw * prog, by + bh / 2, bh * 1.1, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawHeart(x, y, s, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y + s * 0.7);
+  ctx.bezierCurveTo(x - s * 1.1, y - s * 0.2, x - s * 0.5, y - s * 0.9, x, y - s * 0.25);
+  ctx.bezierCurveTo(x + s * 0.5, y - s * 0.9, x + s * 1.1, y - s * 0.2, x, y + s * 0.7);
+  ctx.fill();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function overlay(alpha) {
+  ctx.fillStyle = `rgba(80, 60, 30, ${alpha})`;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function bigText(text, y, size, color, stroke) {
+  ctx.font = `bold ${size}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', 'Yu Gothic', sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = size * 0.15;
+    ctx.lineJoin = 'round';
+    ctx.strokeText(text, W / 2, y);
+  }
+  ctx.fillStyle = color;
+  ctx.fillText(text, W / 2, y);
+}
+
+function pulse() { return 1 + Math.sin(stateTimer * 4) * 0.05; }
+
+function drawTitle() {
+  const base = Math.min(W, H);
+  bigText('クワガタ', H * 0.2, base * 0.13, '#5C3317', '#FFF');
+  bigText('フライング！', H * 0.33, base * 0.13, '#5C3317', '#FFF');
+  ctx.save();
+  ctx.translate(W / 2, H * 0.72);
+  ctx.scale(pulse(), pulse());
+  ctx.translate(-W / 2, -H * 0.72);
+  bigText('がめんを タッチしてね！', H * 0.72, base * 0.055, '#FFF', '#E8743B');
+  ctx.restore();
+  bigText('おしてるあいだ うえにとぶよ', H * 0.83, base * 0.038, '#5C3317', '#FFF');
+}
+
+function drawGoal() {
+  overlay(0.25);
+  const base = Math.min(W, H);
+  bigText('🎉 ゴール！ 🎉', H * 0.3, base * 0.11, '#FFD93D', '#B8860B');
+  bigText('やったね！すごい！', H * 0.45, base * 0.07, '#FFF', '#E8743B');
+  bigText('ゼリー ' + jellies + 'こ ゲット！', H * 0.58, base * 0.055, '#FFE0A3', '#8B5A2B');
+  if (stateTimer > 0.6) {
+    ctx.save();
+    ctx.translate(W / 2, H * 0.75);
+    ctx.scale(pulse(), pulse());
+    ctx.translate(-W / 2, -H * 0.75);
+    bigText('タッチで もういっかい！', H * 0.75, base * 0.05, '#FFF', '#4D96FF');
+    ctx.restore();
+  }
+}
+
+function drawRetry() {
+  overlay(0.25);
+  const base = Math.min(W, H);
+  bigText('あちゃー！', H * 0.32, base * 0.1, '#FFF', '#E8743B');
+  bigText('でも だいじょうぶ！', H * 0.46, base * 0.06, '#FFF', '#5C3317');
+  if (stateTimer > 0.6) {
+    ctx.save();
+    ctx.translate(W / 2, H * 0.68);
+    ctx.scale(pulse(), pulse());
+    ctx.translate(-W / 2, -H * 0.68);
+    bigText('タッチで もういっかい！', H * 0.68, base * 0.055, '#FFF', '#4D96FF');
+    ctx.restore();
+  }
+}
+
+function drawConfettiLayer() {
+  if (state !== STATE.GOAL) return;
+  for (const c of confetti) {
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(c.rot);
+    ctx.fillStyle = c.color;
+    ctx.fillRect(-c.r, -c.r * 0.6, c.r * 2, c.r * 1.2);
+    ctx.restore();
+  }
+}
+
+// ---------- メインループ ----------
+resetGame();
+state = STATE.TITLE;
+stateTimer = 0;
+
+let lastTime = 0;
+function loop(t) {
+  const dt = Math.min((t - lastTime) / 1000, 0.05);
+  lastTime = t;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>

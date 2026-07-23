@@ -402,7 +402,8 @@ function findObstacleAhead(fromX, back, reach) {
 }
 
 // 弾を発射（プレイヤーの弾はボスへ向かって飛ぶ＝小さな子でも当てやすい）
-function fireShot(x, y, side, dmg, color) {
+// pierce = 何個の障害物を貫通して壊せるか
+function fireShot(x, y, side, dmg, color, pierce) {
   const sp = Math.max(W, H) * (side === 'player' ? 0.95 : 0.5);
   let vx, vy = 0;
   if (side === 'player') {
@@ -411,10 +412,13 @@ function fireShot(x, y, side, dmg, color) {
       vx = Math.cos(a) * sp; vy = Math.sin(a) * sp;
     } else { vx = sp; }
   } else { vx = -sp; }
+  const r = beetle.size * (side === 'player' ? 0.4 + Math.min(beetle.power, 12) * 0.02 : 0.36);
   shots.push({
-    x, y, r: beetle.size * 0.36, vx, vy,
-    side, dmg, color: color || (side === 'player' ? '#FFE873' : '#FF5B6E'), spin: 0
+    x, y, r, vx, vy,
+    side, dmg, color: color || (side === 'player' ? '#FFE873' : '#FF5B6E'), spin: 0, pierce: pierce || 1
   });
+  // 発射のマズルフラッシュ
+  if (side === 'player') burstParticles(x, y, '#FFF3B0', 6);
 }
 
 function doAttack() {
@@ -423,24 +427,15 @@ function doAttack() {
     beetle.atkCd = 0.42;
     beetle.atkAnim = 0.3;
     sfx.attack();
-    // 強化するほど攻撃の届く範囲が広がる
-    const reach = beetle.size * 2.4 + Math.min(beetle.power, 12) * beetle.size * 0.16;
-    let hitAny = false;
-    for (let i = obstacles.length - 1; i >= 0; i--) {
-      const ob = obstacles[i];
-      const sx = ob.x - scrollX;
-      if (sx + ob.w / 2 > beetle.x - beetle.size * 0.6 && sx - ob.w / 2 < beetle.x + beetle.size + reach) {
-        smashObstacleIndex(i);
-        hitAny = true;
-      }
-    }
-    if (hitAny) shake = Math.max(shake, 0.6);
+    // ボス戦と同じ「光の弾」を前方へ発射（強化で貫通数アップ）
+    const pierce = 1 + Math.floor(beetle.power / 3);
+    fireShot(beetle.x + beetle.size * 2, beetle.y, 'player', 1, '#FFE873', pierce);
   } else if (state === STATE.BOSS && boss.active && !boss.defeated && boss.introT <= 0) {
     beetle.atkCd = 0.42;
     beetle.atkAnim = 0.3;
     sfx.attack();
     const dmg = 1 + Math.floor(beetle.power / 4);
-    fireShot(beetle.x + beetle.size * 2, beetle.y, 'player', dmg, '#FFE873');
+    fireShot(beetle.x + beetle.size * 2, beetle.y, 'player', dmg, '#FFE873', 1);
   }
 }
 
@@ -548,6 +543,7 @@ function update(dt) {
   if (attackHeld() && beetle.atkCd <= 0) doAttack();
 
   updateCompanions(dt);
+  updateShots(dt);
 
   // 飛行のキラキラ
   if (pressing && Math.random() < 0.3) {
@@ -726,6 +722,24 @@ function updateShots(dt) {
           if (boss.hp <= 0) bossDefeated();
           continue;
         }
+      } else {
+        // 通常ステージ：弾が障害物に当たったら壊す（強化で複数貫通）
+        const groundY = H * 0.88;
+        let done = false;
+        for (let j = obstacles.length - 1; j >= 0; j--) {
+          const ob = obstacles[j];
+          const sx = ob.x - scrollX;
+          const oy0 = ob.type === 'top' ? 0 : groundY - ob.h;
+          const oy1 = ob.type === 'top' ? ob.h : groundY;
+          if (s.x > sx - ob.w / 2 - s.r && s.x < sx + ob.w / 2 + s.r &&
+              s.y > oy0 - s.r && s.y < oy1 + s.r) {
+            smashObstacleIndex(j);
+            shake = Math.max(shake, 0.4);
+            s.pierce--;
+            if (s.pierce <= 0) { shots.splice(i, 1); done = true; break; }
+          }
+        }
+        if (done) continue;
       }
     } else {
       if (beetle.invincible <= 0) {
@@ -853,6 +867,7 @@ function draw() {
     drawObstacles();
     drawItems();
     drawGoalFlag();
+    drawShots();
     drawParticles();
     drawCompanions();
     drawBeetle();

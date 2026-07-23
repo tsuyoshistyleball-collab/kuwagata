@@ -1889,31 +1889,40 @@ function drawBoss() {
   ctx.restore();
 }
 
-// 持っている武器の一覧（例：「レーザー2 ばくだん1」。武器がなければ「ノーマル」）
+// 持っている武器のコンパクト表示（例：「⚡2 💣1」）
 function weaponSummary() {
-  const nm = { laser: 'レーザー', bomb: 'ばくだん', spread: 'さんだん' };
+  const ic = { laser: '⚡', bomb: '💣', spread: '✳️' };
   const parts = [];
-  for (const id of ['laser', 'bomb', 'spread']) { const lv = beetle.weapons[id] || 0; if (lv > 0) parts.push(nm[id] + lv); }
-  return parts.length ? parts.join(' ') : 'ノーマル';
+  for (const id of ['laser', 'bomb', 'spread']) { const lv = beetle.weapons[id] || 0; if (lv > 0) parts.push(ic[id] + lv); }
+  return parts.join(' ');
 }
 function drawHUD() {
   if (state !== STATE.PLAY && state !== STATE.GOAL && state !== STATE.RETRY && state !== STATE.BOSS) return;
-  const pad = Math.min(W, H) * 0.03;
-  const hs = Math.min(W, H) * 0.04;
+  const pad = Math.min(W, H) * 0.022;
+  const hs = Math.min(W, H) * 0.028;   // コンパクトに
+  const sp = hs * 2.0;                  // ハートの間隔
 
-  // HUDの下地（障害物と重なっても見やすいように）
-  const panelH = (companions.length > 0 ? 7.6 : 6.2) * hs;
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  roundRect(pad * 0.4, pad * 0.4, hs * 2.3 * MAX_HEARTS + pad, panelH, hs * 0.6);
+  // ラベルを先に測ってパネル幅を中身に合わせる
+  const wsum = weaponSummary();
+  const label = 'Lv' + level + (wsum ? '  ' + wsum : '');
+  ctx.font = `bold ${hs * 0.95}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const heartsW = sp * MAX_HEARTS + pad;
+  const panelW = Math.max(heartsW, ctx.measureText(label).width + hs * 1.4);
+  const panelH = (companions.length > 0 ? 7.0 : 5.6) * hs;
+
+  // 下地
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  roundRect(pad * 0.4, pad * 0.4, panelW, panelH, hs * 0.55);
   ctx.fill();
 
   // ハート
   for (let i = 0; i < MAX_HEARTS; i++) {
-    drawHeart(pad + hs + i * hs * 2.3, pad + hs, hs, i < hearts ? '#FF5B6E' : 'rgba(0,0,0,0.15)');
+    drawHeart(pad + hs + i * sp, pad + hs, hs, i < hearts ? '#FF5B6E' : 'rgba(0,0,0,0.15)');
   }
 
   // ゼリー数
-  const jx = pad + hs, jy = pad + hs * 3.2;
+  const jx = pad + hs, jy = pad + hs * 3.0;
   ctx.fillStyle = '#FFB84D';
   ctx.beginPath();
   ctx.moveTo(jx - hs * 0.7, jy - hs * 0.4);
@@ -1923,16 +1932,16 @@ function drawHUD() {
   ctx.closePath();
   ctx.fill();
   ctx.fillStyle = '#5C3317';
-  ctx.font = `bold ${hs * 1.5}px sans-serif`;
+  ctx.font = `bold ${hs * 1.25}px sans-serif`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText('× ' + jellies, jx + hs * 1.2, jy + hs * 0.1);
+  ctx.fillText('×' + jellies, jx + hs * 1.1, jy + hs * 0.1);
 
-  // レベル＆経験値バー＆持っている武器（加算表示）
-  const ex = pad * 0.9, ey = jy + hs * 1.9, ew = hs * 2.3 * MAX_HEARTS - hs * 0.6, eh = hs * 0.5;
+  // レベル＆経験値バー＆持っている武器
+  const ex = pad * 0.9, ey = jy + hs * 1.7, ew = panelW - hs * 1.0, eh = hs * 0.44;
   ctx.fillStyle = '#5C3317';
   ctx.font = `bold ${hs * 0.95}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
-  ctx.fillText('Lv' + level + '  ' + weaponSummary(), ex, ey - hs * 0.55);
+  ctx.fillText(label, ex, ey - hs * 0.5);
   ctx.fillStyle = 'rgba(0,0,0,0.15)'; roundRect(ex, ey, ew, eh, eh / 2); ctx.fill();
   ctx.fillStyle = '#7ED0FF';
   const ef = Math.min(1, exp / expToNext);
@@ -1980,9 +1989,9 @@ function drawHUD() {
   // 仲間の数
   if (companions.length > 0) {
     ctx.fillStyle = '#2A6FB0';
-    ctx.font = `bold ${hs * 1.05}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
+    ctx.font = `bold ${hs * 0.95}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText('なかま ×' + companions.length + ' /4', jx - hs * 0.6, jy + hs * 3.3);
+    ctx.fillText('なかま×' + companions.length + '/4', jx - hs * 0.6, jy + hs * 3.0);
   }
 }
 

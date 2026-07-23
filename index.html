@@ -11,19 +11,24 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
-    width: 100%; height: 100%;
+    width: 100%;
+    height: 100%;
+    min-height: 100vh;
     overflow: hidden;
     touch-action: none;
     -webkit-user-select: none;
     user-select: none;
     -webkit-touch-callout: none;
     background: #87CEEB;
-    position: fixed;
   }
   #game {
     display: block;
-    width: 100%;
-    height: 100%;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    touch-action: none;
   }
 </style>
 </head>
@@ -37,18 +42,32 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
 let W = 0, H = 0, DPR = 1;
+let started = false;
+function measure() {
+  // iframe や各種モバイル環境でも確実にサイズを取得する
+  const w = window.innerWidth || document.documentElement.clientWidth || canvas.clientWidth || 0;
+  const h = window.innerHeight || document.documentElement.clientHeight || canvas.clientHeight || 0;
+  return { w, h };
+}
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth;
-  H = window.innerHeight;
-  canvas.width = W * DPR;
-  canvas.height = H * DPR;
+  const m = measure();
+  // サイズがまだ取れていなければ次のフレームで再試行（真っ黒画面の防止）
+  if (m.w < 10 || m.h < 10) { requestAnimationFrame(resize); return; }
+  const first = (W < 10 || H < 10);
+  W = m.w;
+  H = m.h;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
   canvas.style.width = W + 'px';
   canvas.style.height = H + 'px';
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  // 初めて有効なサイズが取れた時点でレイアウトを組み直す
+  if (first && started) resetGame();
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 300));
+window.addEventListener('load', resize);
 resize();
 
 // ---------- サウンド ----------
@@ -758,6 +777,8 @@ function drawConfettiLayer() {
 }
 
 // ---------- メインループ ----------
+started = true;
+if (W < 10 || H < 10) resize();   // まだサイズ未確定なら確定させる
 resetGame();
 state = STATE.TITLE;
 stateTimer = 0;
@@ -766,8 +787,10 @@ let lastTime = 0;
 function loop(t) {
   const dt = Math.min((t - lastTime) / 1000, 0.05);
   lastTime = t;
-  update(dt);
-  draw();
+  if (W >= 10 && H >= 10) {   // 有効なサイズが取れている時だけ描画
+    update(dt);
+    draw();
+  }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

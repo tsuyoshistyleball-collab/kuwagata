@@ -291,7 +291,8 @@ let shake = 0;
 let goalTimer = 0;
 let stateTimer = 0;
 let companions = [];     // 仲間の虫
-let shots = [];          // 弾（ボス戦）{x,y,vx,vy,r,side,dmg,color,spin}
+let enemies = [];        // 道中の敵キャラ
+let shots = [];          // 弾 {x,y,vx,vy,r,side,dmg,color,spin,pierce}
 let bossBanner = 0;      // 「ボスとうじょう！」表示
 const boss = {
   active: false, defeated: false,
@@ -324,6 +325,14 @@ function courseSetup() {
     }
   }
 
+  // 道中の敵キャラ（スズメバチ）を配置
+  enemies = [];
+  for (let k = 0; k < 6; k++) {
+    const ex = spacing * (3.4 + k * 2.4);
+    const ey = H * (0.22 + Math.random() * 0.42);
+    enemies.push({ x: ex, y: ey, baseY: ey, hp: 3, maxHp: 3, fireCd: 1.6 + Math.random() * 1.2, bob: Math.random() * 6, hurt: 0, wing: 0 });
+  }
+
   clouds = [];
   for (let i = 0; i < 6; i++) {
     clouds.push({ x: Math.random() * W * 2, y: H * (0.05 + Math.random() * 0.3), s: 0.5 + Math.random() * 0.8 });
@@ -349,6 +358,7 @@ function resetGame() {
   particles = [];
   confetti = [];
   companions = [];
+  enemies = [];
   shots = [];
   boss.active = false;
   boss.defeated = false;
@@ -538,6 +548,7 @@ function update(dt) {
   if (attackHeld() && beetle.atkCd <= 0) doAttack();
 
   updateCompanions(dt);
+  updateEnemies(dt);
   updateShots(dt);
 
   // 飛行のキラキラ
@@ -549,33 +560,7 @@ function update(dt) {
     });
   }
 
-  // 障害物との当たり判定（ゆるめ：見た目より小さい判定）
-  const hitR = beetle.size * 0.62;
-  for (const ob of obstacles) {
-    const sx = ob.x - scrollX;
-    if (sx < -ob.w * 2 || sx > W + ob.w) continue;
-    let ox0 = sx - ob.w / 2, ox1 = sx + ob.w / 2;
-    let oy0, oy1;
-    if (ob.type === 'top') { oy0 = 0; oy1 = ob.h; }
-    else { oy0 = groundY - ob.h; oy1 = groundY; }
-    // 円と矩形の判定
-    const cx = Math.max(ox0, Math.min(beetle.x, ox1));
-    const cy = Math.max(oy0, Math.min(beetle.y, oy1));
-    const dx = beetle.x - cx, dy = beetle.y - cy;
-    if (dx * dx + dy * dy < hitR * hitR && beetle.invincible <= 0) {
-      hearts--;
-      beetle.invincible = 2.0;
-      shake = 1;
-      sfx.hit();
-      beetle.vy = ob.type === 'top' ? H * 0.3 : -H * 0.3;
-      burstParticles(beetle.x, beetle.y, '#FF8888', 12);
-      if (hearts <= 0) {
-        state = STATE.RETRY;
-        stateTimer = 0;
-        Music.stop();
-      }
-    }
-  }
+  // ※ 障害物に当たってもダメージは受けない（壊す対象）
 
   // ゼリー取得
   for (const it of items) {
@@ -666,6 +651,7 @@ function startBoss() {
   boss.bob = 0;
   boss.hurt = 0;
   shots = [];
+  enemies = [];
   beetle.x = W * 0.16;
   beetle.vy = 0;
   beetle.invincible = 1.2;
@@ -688,60 +674,120 @@ function bossFire() {
   const sp = Math.max(W, H) * 0.42;
   for (const off of [-0.2, 0, 0.2]) {
     const a = ang + off;
-    shots.push({ x: bx, y: by, r: boss.size * 0.13, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, side: 'boss', dmg: 1, color: '#FF5B6E', spin: 0 });
+    shots.push({ x: bx, y: by, r: boss.size * 0.13, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, side: 'enemy', dmg: 1, color: '#FF5B6E', spin: 0, pierce: 1 });
   }
   sfx.attack();
 }
+
+// プレイヤーがダメージを受ける（敵の攻撃・敵との接触）
+function damagePlayer() {
+  if (beetle.invincible > 0) return;
+  hearts--;
+  beetle.invincible = 1.6;
+  shake = 1;
+  sfx.hit();
+  burstParticles(beetle.x, beetle.y, '#FF8888', 12);
+  if (hearts <= 0) { state = STATE.RETRY; stateTimer = 0; Music.stop(); }
+}
+
+// ---------- 道中の敵 ----------
+function enemyFire(sx, ey) {
+  const ang = Math.atan2(beetle.y - ey, beetle.x - sx);
+  const sp = Math.max(W, H) * 0.38;
+  shots.push({ x: sx, y: ey, r: beetle.size * 0.34, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, side: 'enemy', dmg: 1, color: '#C060E8', spin: 0, pierce: 1 });
+  sfx.attack();
+}
+function updateEnemies(dt) {
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    const sx = e.x - scrollX;
+    e.wing += dt * 30;
+    if (e.hurt > 0) e.hurt -= dt;
+    if (sx < -H * 0.25) { enemies.splice(i, 1); continue; }   // 画面左に流れて退場
+    if (sx > W + H * 0.2) continue;                            // まだ右で登場前
+    e.bob += dt;
+    e.y = e.baseY + Math.sin(e.bob * 1.4) * H * 0.06;
+    // 画面内かつプレイヤーより前（右）にいるとき攻撃
+    if (sx < W * 0.96 && sx > beetle.x - beetle.size) {
+      e.fireCd -= dt;
+      if (e.fireCd <= 0) { enemyFire(sx, e.y); e.fireCd = 2.0 + Math.random() * 0.9; }
+    }
+    // 接触ダメージ
+    const dx = beetle.x - sx, dy = beetle.y - e.y;
+    const rr = beetle.size * 0.6 + Math.min(W, H) * 0.045;
+    if (dx * dx + dy * dy < rr * rr) damagePlayer();
+  }
+}
+
 function updateShots(dt) {
-  for (let i = shots.length - 1; i >= 0; i--) {
-    const s = shots[i];
+  const groundY = H * 0.88;
+  // 移動＆画面外判定
+  for (const s of shots) {
     s.x += s.vx * dt; s.y += s.vy * dt; s.spin += dt * 12;
-    if (s.x < -80 || s.x > W + 80 || s.y < -80 || s.y > H + 80) { shots.splice(i, 1); continue; }
+    if (s.x < -80 || s.x > W + 80 || s.y < -80 || s.y > H + 80) s.dead = true;
+  }
+  for (const s of shots) {
+    if (s.dead) continue;
     if (s.side === 'player') {
+      // 敵の弾を打ち消す
+      for (const o of shots) {
+        if (o === s || o.dead || o.side === 'player') continue;
+        const dx = s.x - o.x, dy = s.y - o.y, rr = s.r + o.r;
+        if (dx * dx + dy * dy < rr * rr) {
+          s.dead = true; o.dead = true;
+          burstParticles((s.x + o.x) / 2, (s.y + o.y) / 2, '#FFFFFF', 8);
+          break;
+        }
+      }
+      if (s.dead) continue;
+      // ボスに当たる（縦長判定で当てやすく）
       if (boss.active && !boss.defeated && boss.introT <= 0) {
-        // ロボットは縦長なので当たり判定も縦長に（当てやすく）
         const dx = (s.x - boss.x) / (boss.size * 1.0);
         const dy = (s.y - boss.y) / (boss.size * 1.25);
         if (dx * dx + dy * dy < 1) {
           boss.hp -= s.dmg; boss.hurt = 0.16; sfx.smash();
           burstParticles(s.x, s.y, '#FFE873', 10);
-          shots.splice(i, 1);
+          s.dead = true;
           if (boss.hp <= 0) bossDefeated();
           continue;
         }
-      } else {
-        // 通常ステージ：弾が障害物に当たったら壊す（強化で複数貫通）
-        const groundY = H * 0.88;
-        let done = false;
-        for (let j = obstacles.length - 1; j >= 0; j--) {
-          const ob = obstacles[j];
-          const sx = ob.x - scrollX;
-          const oy0 = ob.type === 'top' ? 0 : groundY - ob.h;
-          const oy1 = ob.type === 'top' ? ob.h : groundY;
-          if (s.x > sx - ob.w / 2 - s.r && s.x < sx + ob.w / 2 + s.r &&
-              s.y > oy0 - s.r && s.y < oy1 + s.r) {
-            smashObstacleIndex(j);
-            shake = Math.max(shake, 0.4);
-            s.pierce--;
-            if (s.pierce <= 0) { shots.splice(i, 1); done = true; break; }
-          }
+      }
+      // 敵に当たる
+      for (let j = enemies.length - 1; j >= 0; j--) {
+        const e = enemies[j], ex = e.x - scrollX;
+        const dx = s.x - ex, dy = s.y - e.y, rr = Math.min(W, H) * 0.05 + s.r;
+        if (dx * dx + dy * dy < rr * rr) {
+          e.hp -= s.dmg; e.hurt = 0.15;
+          burstParticles(s.x, s.y, '#FFE873', 8);
+          s.dead = true;
+          if (e.hp <= 0) { burstParticles(ex, e.y, '#C060E8', 20); sfx.smash(); enemies.splice(j, 1); }
+          break;
         }
-        if (done) continue;
+      }
+      if (s.dead) continue;
+      // 障害物に当たったら壊す（強化で複数貫通）
+      for (let j = obstacles.length - 1; j >= 0; j--) {
+        const ob = obstacles[j];
+        const sx = ob.x - scrollX;
+        const oy0 = ob.type === 'top' ? 0 : groundY - ob.h;
+        const oy1 = ob.type === 'top' ? ob.h : groundY;
+        if (s.x > sx - ob.w / 2 - s.r && s.x < sx + ob.w / 2 + s.r &&
+            s.y > oy0 - s.r && s.y < oy1 + s.r) {
+          smashObstacleIndex(j);
+          shake = Math.max(shake, 0.4);
+          s.pierce--;
+          if (s.pierce <= 0) { s.dead = true; break; }
+        }
       }
     } else {
-      if (beetle.invincible <= 0) {
-        const dx = s.x - beetle.x, dy = s.y - beetle.y;
-        const rr = beetle.size * 0.6 + s.r;
-        if (dx * dx + dy * dy < rr * rr) {
-          hearts--; beetle.invincible = 1.6; shake = 1; sfx.hit();
-          burstParticles(beetle.x, beetle.y, '#FF8888', 12);
-          shots.splice(i, 1);
-          if (hearts <= 0) { state = STATE.RETRY; stateTimer = 0; Music.stop(); }
-          continue;
-        }
-      }
+      // 敵の弾：プレイヤーに当たる
+      const dx = s.x - beetle.x, dy = s.y - beetle.y;
+      const rr = beetle.size * 0.6 + s.r;
+      if (dx * dx + dy * dy < rr * rr) { damagePlayer(); s.dead = true; }
     }
   }
+  // 死んだ弾を除去
+  for (let i = shots.length - 1; i >= 0; i--) if (shots[i].dead) shots.splice(i, 1);
 }
 function updateBoss(dt) {
   // 飛行（上下移動のみ・スクロールなし）
@@ -854,6 +900,7 @@ function draw() {
     drawObstacles();
     drawItems();
     drawGoalFlag();
+    drawEnemies();
     drawShots();
     drawParticles();
     drawCompanions();
@@ -1064,6 +1111,52 @@ function drawCompanions() {
   }
 }
 
+// 道中の敵（スズメバチ）
+function drawEnemies() {
+  const s = Math.min(W, H) * 0.045;
+  for (const e of enemies) {
+    const ex = e.x - scrollX;
+    if (ex < -s * 3 || ex > W + s * 3) continue;
+    ctx.save();
+    ctx.translate(ex, e.y);
+    const flap = Math.sin(e.wing);
+    const flash = e.hurt > 0;
+    // 羽（とがった半透明）
+    ctx.fillStyle = 'rgba(210,190,255,0.55)';
+    for (const sgn of [-1, 1]) {
+      ctx.save(); ctx.rotate(sgn * (0.5 + flap * 0.4));
+      ctx.beginPath(); ctx.ellipse(sgn * s * 0.2, -s * 0.7, s * 0.3, s * 0.6, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+    // 針（お尻の毒針）
+    ctx.fillStyle = '#2A1030';
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.95, 0); ctx.lineTo(-s * 1.35, -s * 0.1); ctx.lineTo(-s * 0.95, s * 0.14);
+    ctx.closePath(); ctx.fill();
+    // 体（濃い紫＋黒しま）
+    const g = ctx.createLinearGradient(0, -s * 0.6, 0, s * 0.6);
+    g.addColorStop(0, flash ? '#FFFFFF' : '#7A2E6E');
+    g.addColorStop(1, flash ? '#FFCFE8' : '#3A1030');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.ellipse(0, 0, s * 0.95, s * 0.62, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = flash ? '#E0A0C0' : '#25101E';
+    for (let i = -1; i <= 1; i++) { ctx.fillRect(i * s * 0.4 - s * 0.08, -s * 0.5, s * 0.16, s); }
+    // 頭
+    ctx.fillStyle = flash ? '#FFFFFF' : '#2A1224';
+    ctx.beginPath(); ctx.ellipse(s * 0.85, -s * 0.05, s * 0.4, s * 0.42, 0, 0, Math.PI * 2); ctx.fill();
+    // 怒った赤い目
+    ctx.fillStyle = '#FF3B4B';
+    ctx.shadowColor = '#FF3B4B'; ctx.shadowBlur = s * 0.3;
+    ctx.beginPath(); ctx.ellipse(s * 0.92, -s * 0.12, s * 0.16, s * 0.11, -0.5, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    // 牙
+    ctx.strokeStyle = '#1A0A16'; ctx.lineWidth = s * 0.07; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(s * 1.15, s * 0.08); ctx.lineTo(s * 1.35, s * 0.28); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(s * 1.15, s * 0.18); ctx.lineTo(s * 1.28, s * 0.38); ctx.stroke();
+    ctx.restore();
+  }
+}
+
 function drawShots() {
   for (const s of shots) {
     ctx.save();
@@ -1166,8 +1259,11 @@ function drawBeetle() {
   // 無敵中は点滅
   if (b.invincible > 0 && Math.floor(b.invincible * 10) % 2 === 0) return;
 
-  const glam = Math.min(b.power | 0, 12);          // 強化レベル（見た目）
-  const grow = 1 + glam * 0.018;                    // 強化で少し大きく
+  const p = b.power | 0;                            // 強化レベル（ゼリーの数）
+  const GOLD = 10;                                  // この数で全身が金色（最終形態）
+  const gold = p >= GOLD;
+  const auraLv = Math.min(p / GOLD, 1);             // 0..1（オーラの強さ）
+  const grow = 1 + Math.min(p, 12) * 0.016;         // 強化で少し大きく
   const atk = b.atkAnim > 0 ? b.atkAnim / 0.3 : 0;  // 攻撃モーション 1→0
   const chomp = atk > 0 ? 1 - Math.sin((1 - atk) * Math.PI) * 0.72 : 1;   // 開→閉→開
   const lunge = atk > 0 ? Math.sin((1 - atk) * Math.PI) * s * 0.5 : 0;    // 前方へ突き出す
@@ -1180,13 +1276,17 @@ function drawBeetle() {
   const vs = s;
   const flap = Math.sin(b.wingPhase);
 
-  // ---- 強化オーラ ----
-  if (glam >= 5) {
-    const aura = ctx.createRadialGradient(0, 0, vs * 1.1, 0, 0, vs * 2.7);
-    aura.addColorStop(0, glam >= 8 ? 'rgba(255,170,235,0.4)' : 'rgba(255,224,120,0.4)');
-    aura.addColorStop(1, glam >= 8 ? 'rgba(255,170,235,0)' : 'rgba(255,224,120,0)');
+  // ---- 強化オーラ（パワーアップで体にまとう光。数が増えるほど強く輝く） ----
+  if (p >= 1) {
+    const pulse = 1 + Math.sin(stateTimer * 4) * 0.06;
+    const rad = vs * (1.7 + auraLv * 1.4) * pulse;
+    const inner = gold ? 'rgba(255,240,150,0.9)' : `rgba(255,226,140,${0.2 + auraLv * 0.45})`;
+    const aura = ctx.createRadialGradient(0, 0, vs * 0.6, 0, 0, rad);
+    aura.addColorStop(0, inner);
+    aura.addColorStop(0.6, gold ? 'rgba(255,215,90,0.35)' : `rgba(255,220,120,${0.12 + auraLv * 0.2})`);
+    aura.addColorStop(1, 'rgba(255,215,90,0)');
     ctx.fillStyle = aura;
-    ctx.beginPath(); ctx.arc(0, 0, vs * 2.7, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, rad, 0, Math.PI * 2); ctx.fill();
   }
 
   // ---- 羽（半透明・後ろ） ----
@@ -1214,23 +1314,21 @@ function drawBeetle() {
   ctx.lineTo(vs * 1.28, vs * 0.72);
   ctx.stroke();
 
-  // ---- 上翅（エリトラ：細長く光沢のある平たい体） ----
+  // ---- 上翅（エリトラ：細長く光沢のある平たい体。最終形態で金色に） ----
   const bodyGrad = ctx.createLinearGradient(-vs, -vs * 0.6, vs * 0.6, vs * 0.6);
-  bodyGrad.addColorStop(0, '#4A2E17');
-  bodyGrad.addColorStop(0.5, '#2A1810');
-  bodyGrad.addColorStop(1, '#150B04');
+  if (gold) {
+    bodyGrad.addColorStop(0, '#FFF4B8');
+    bodyGrad.addColorStop(0.5, '#F2C33A');
+    bodyGrad.addColorStop(1, '#B8860B');
+  } else {
+    bodyGrad.addColorStop(0, '#4A2E17');
+    bodyGrad.addColorStop(0.5, '#2A1810');
+    bodyGrad.addColorStop(1, '#150B04');
+  }
   ctx.fillStyle = bodyGrad;
   ctx.beginPath();
   ctx.ellipse(-vs * 0.12, 0, vs * 1.18, vs * 0.64, 0, 0, Math.PI * 2);
   ctx.fill();
-  // 強化：金のふち取り
-  if (glam >= 5) {
-    ctx.strokeStyle = glam >= 8 ? '#FFD54A' : '#D9A441';
-    ctx.lineWidth = vs * 0.06;
-    ctx.beginPath();
-    ctx.ellipse(-vs * 0.12, 0, vs * 1.18, vs * 0.64, 0, 0, Math.PI * 2);
-    ctx.stroke();
-  }
   // エリトラの合わせ目
   ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = vs * 0.05;
   ctx.beginPath(); ctx.moveTo(-vs * 1.25, 0); ctx.lineTo(vs * 0.5, 0); ctx.stroke();
@@ -1240,20 +1338,20 @@ function drawBeetle() {
 
   // ---- 前胸（プロノータム） ----
   const proGrad = ctx.createLinearGradient(0, -vs * 0.5, 0, vs * 0.5);
-  proGrad.addColorStop(0, '#3A2211'); proGrad.addColorStop(1, '#150B04');
+  if (gold) { proGrad.addColorStop(0, '#FFE58A'); proGrad.addColorStop(1, '#C8931A'); }
+  else { proGrad.addColorStop(0, '#3A2211'); proGrad.addColorStop(1, '#150B04'); }
   ctx.fillStyle = proGrad;
   ctx.beginPath(); ctx.ellipse(vs * 0.6, 0, vs * 0.52, vs * 0.56, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = 'rgba(255,255,255,0.14)';
   ctx.beginPath(); ctx.ellipse(vs * 0.5, -vs * 0.26, vs * 0.3, vs * 0.1, -0.2, 0, Math.PI * 2); ctx.fill();
 
   // ---- 頭 ----
-  ctx.fillStyle = '#150B04';
+  ctx.fillStyle = gold ? '#C8931A' : '#150B04';
   ctx.beginPath(); ctx.ellipse(vs * 1.12, 0, vs * 0.42, vs * 0.44, 0, 0, Math.PI * 2); ctx.fill();
 
-  // ---- 大あご（クワガタの象徴！ハサミ型） ----
+  // ---- 大あご（クワガタの象徴！ハサミ型。色はパワーで変えず、最終形態のみ金色） ----
   let mandFill, mandStroke;
-  if (glam >= 8) { mandFill = mandGrad(vs, '#FFF3B0', '#E8A417'); mandStroke = '#8A5E00'; }
-  else if (glam >= 1) { mandFill = mandGrad(vs, '#EBC65E', '#A9770C'); mandStroke = '#6E4A00'; }
+  if (gold) { mandFill = mandGrad(vs, '#FFF3B0', '#E8A417'); mandStroke = '#8A5E00'; }
   else { mandFill = mandGrad(vs, '#5A3A1E', '#241206'); mandStroke = '#0E0702'; }
   drawMandible(vs, -1, chomp, mandFill, mandStroke);
   drawMandible(vs, 1, chomp, mandFill, mandStroke);
@@ -1266,28 +1364,11 @@ function drawBeetle() {
   ctx.fillStyle = '#FFF';
   ctx.beginPath(); ctx.arc(vs * 1.19, -vs * 0.14, vs * 0.035, 0, Math.PI * 2); ctx.fill();
 
-  // ---- 王冠（強化 tier3+） ----
-  if (glam >= 3) {
-    const cx = vs * 0.5, cy = -vs * 0.66, cw = vs * 0.8;
-    ctx.fillStyle = '#FFD54A';
-    ctx.beginPath();
-    ctx.moveTo(cx - cw / 2, cy);
-    ctx.lineTo(cx - cw / 2, cy - vs * 0.3);
-    ctx.lineTo(cx - cw * 0.22, cy - vs * 0.04);
-    ctx.lineTo(cx, cy - vs * 0.34);
-    ctx.lineTo(cx + cw * 0.22, cy - vs * 0.04);
-    ctx.lineTo(cx + cw / 2, cy - vs * 0.3);
-    ctx.lineTo(cx + cw / 2, cy);
-    ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#FF5B6E';
-    ctx.beginPath(); ctx.arc(cx, cy - vs * 0.06, vs * 0.07, 0, Math.PI * 2); ctx.fill();
-  }
-
-  // ---- 星のキラキラ（最上位 tier8+） ----
-  if (glam >= 8) {
-    for (let i = 0; i < 3; i++) {
-      const a = stateTimer * 2.2 + i * Math.PI * 2 / 3;
-      drawStar(Math.cos(a) * vs * 1.9, Math.sin(a) * vs * 1.3, vs * 0.2, '#FFF3A0');
+  // ---- 星のキラキラ（最終形態＝金色のとき） ----
+  if (gold) {
+    for (let i = 0; i < 4; i++) {
+      const a = stateTimer * 2.2 + i * Math.PI * 2 / 4;
+      drawStar(Math.cos(a) * vs * 2.0, Math.sin(a) * vs * 1.35, vs * 0.2, '#FFF3A0');
     }
   }
 
@@ -1673,9 +1754,16 @@ if (typeof location !== 'undefined' && location.search.indexOf('debug') >= 0) {
     addObstacleAhead() {
       obstacles.push({ x: scrollX + beetle.x + beetle.size * 3, type: 'bottom', h: H * 0.3, w: Math.max(W, H) * 0.055, passed: false });
     },
+    addEnemyAhead(y) {
+      enemies.push({ x: scrollX + W * 0.7, y: y || H * 0.4, baseY: y || H * 0.4, hp: 3, maxHp: 3, fireCd: 0.2, bob: 0, hurt: 0, wing: 0 });
+    },
+    enemyFireAll() { for (const e of enemies) enemyFire(e.x - scrollX, e.y); },
     get state() { return state; },
+    get hearts() { return hearts; },
     get companionCount() { return companions.length; },
+    get enemyCount() { return enemies.length; },
     get shotCount() { return shots.length; },
+    get enemyShotCount() { return shots.filter(s => s.side === 'enemy').length; },
     get obstacleCount() { return obstacles.length; }
   };
 }

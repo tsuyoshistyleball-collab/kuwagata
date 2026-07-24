@@ -764,7 +764,8 @@ function applyUpgrade(u) {
 // ---------- 仲間の虫 ----------
 function addCompanion() {
   if (companions.length >= MAX_COMPANIONS) return;   // 仲間は最大4匹
-  const types = ['ladybug', 'bee', 'ant'];
+  // 1人目＝バッタ、2人目＝カマキリ、以降テントウムシ・ハチ
+  const types = ['grasshopper', 'mantis', 'ladybug', 'bee'];
   const i = companions.length;
   companions.push({
     type: types[i % types.length],
@@ -792,8 +793,10 @@ function updateCompanions(dt) {
       if (bossNotReady) {
         c.atkCd = 0.4;   // ボス登場前は撃たない
       } else {
-        fireShot(c.x, c.y, 'player', 1, '#FF8A5B', 1);
-        c.atkCd = 1.0;
+        // 仲間の攻撃を強化：威力アップ・貫通・連射を速く
+        const cdmg = 3 + Math.floor(level / 2);
+        fireShot(c.x, c.y, 'player', cdmg, '#FF8A5B', 2);
+        c.atkCd = 0.7;
       }
     }
   }
@@ -1420,6 +1423,58 @@ function drawBug(type, x, y, s, wingPhase) {
     ctx.strokeStyle = '#3A2A22'; ctx.lineWidth = s * 0.08;
     ctx.beginPath(); ctx.moveTo(s * 0.7, -s * 0.2); ctx.lineTo(s * 0.95, -s * 0.5); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(s * 0.7, -s * 0.2); ctx.lineTo(s * 0.98, -s * 0.3); ctx.stroke();
+  } else if (type === 'grasshopper') {
+    // バッタ（緑・大きなジャンプ脚）※前方＝右向き
+    ctx.strokeStyle = '#4E9A34'; ctx.lineWidth = s * 0.13; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    // うしろ脚（くの字のジャンプ脚）
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.25, s * 0.1); ctx.lineTo(-s * 0.72, -s * 0.55); ctx.lineTo(-s * 1.0, s * 0.55);
+    ctx.stroke();
+    // 中脚・前脚
+    ctx.lineWidth = s * 0.07;
+    ctx.beginPath(); ctx.moveTo(s * 0.05, s * 0.3); ctx.lineTo(s * 0.18, s * 0.62); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(s * 0.4, s * 0.28); ctx.lineTo(s * 0.55, s * 0.6); ctx.stroke();
+    // 体
+    ctx.fillStyle = '#83C24E';
+    ctx.beginPath(); ctx.ellipse(-s * 0.1, 0, s * 0.88, s * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = s * 0.05;
+    ctx.beginPath(); ctx.moveTo(-s * 0.8, s * 0.02); ctx.lineTo(s * 0.5, s * 0.02); ctx.stroke();
+    // 頭
+    ctx.fillStyle = '#6FAE40';
+    ctx.beginPath(); ctx.ellipse(s * 0.72, -s * 0.04, s * 0.34, s * 0.36, 0, 0, Math.PI * 2); ctx.fill();
+    // 目
+    ctx.fillStyle = '#FFF'; ctx.beginPath(); ctx.arc(s * 0.82, -s * 0.12, s * 0.12, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(s * 0.86, -s * 0.12, s * 0.06, 0, Math.PI * 2); ctx.fill();
+    // 触角
+    ctx.strokeStyle = '#4E9A34'; ctx.lineWidth = s * 0.05;
+    ctx.beginPath(); ctx.moveTo(s * 0.95, -s * 0.22); ctx.lineTo(s * 1.35, -s * 0.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(s * 0.95, -s * 0.16); ctx.lineTo(s * 1.35, -s * 0.28); ctx.stroke();
+  } else if (type === 'mantis') {
+    // カマキリ（緑・鎌の前脚）※前方＝右向き
+    const g = '#6FC24E';
+    ctx.strokeStyle = '#4E9A34'; ctx.lineWidth = s * 0.09; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    // 後ろ脚2本
+    for (const lx of [-s * 0.55, -s * 0.15]) { ctx.beginPath(); ctx.moveTo(lx, s * 0.2); ctx.lineTo(lx - s * 0.12, s * 0.62); ctx.stroke(); }
+    // 体（細長い）
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.ellipse(-s * 0.25, 0, s * 0.8, s * 0.32, 0, 0, Math.PI * 2); ctx.fill();
+    // 前胸（首）
+    ctx.beginPath(); ctx.ellipse(s * 0.4, -s * 0.02, s * 0.4, s * 0.2, -0.15, 0, Math.PI * 2); ctx.fill();
+    // 頭（三角）
+    ctx.fillStyle = '#5CB03E';
+    ctx.beginPath(); ctx.moveTo(s * 0.72, -s * 0.38); ctx.lineTo(s * 1.02, -s * 0.05); ctx.lineTo(s * 0.72, s * 0.12); ctx.closePath(); ctx.fill();
+    // 大きな目
+    ctx.fillStyle = '#FFF'; ctx.beginPath(); ctx.arc(s * 0.86, -s * 0.22, s * 0.13, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(s * 0.9, -s * 0.22, s * 0.06, 0, Math.PI * 2); ctx.fill();
+    // 鎌（前脚）
+    ctx.strokeStyle = g; ctx.lineWidth = s * 0.13;
+    ctx.beginPath(); ctx.moveTo(s * 0.45, s * 0.05); ctx.lineTo(s * 0.85, s * 0.28); ctx.lineTo(s * 1.2, -s * 0.08); ctx.stroke();
+    // 鎌の内側のトゲ
+    ctx.strokeStyle = '#3E8A2E'; ctx.lineWidth = s * 0.045;
+    ctx.beginPath(); ctx.moveTo(s * 0.9, s * 0.16); ctx.lineTo(s * 1.12, -s * 0.02); ctx.stroke();
+    // 触角
+    ctx.strokeStyle = '#4E9A34'; ctx.lineWidth = s * 0.045;
+    ctx.beginPath(); ctx.moveTo(s * 0.92, -s * 0.34); ctx.lineTo(s * 1.28, -s * 0.6); ctx.stroke();
   } else {
     // テントウムシ
     ctx.fillStyle = 'rgba(255,255,255,0.7)';

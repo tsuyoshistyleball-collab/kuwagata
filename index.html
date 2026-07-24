@@ -90,11 +90,41 @@ function beep(freq, dur, type, vol, delay) {
   osc.connect(gain); gain.connect(audioCtx.destination);
   osc.start(t); osc.stop(t + dur);
 }
+// 周波数を滑らかに変える音（ビーム/ズドンなど）
+function sweep(f0, f1, dur, type, vol, delay) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime + (delay || 0);
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = type || 'sawtooth';
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+  g.gain.setValueAtTime(vol || 0.12, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+// ノイズのひと吹き（炎のシューッなど）
+function noiseBurst(dur, vol, freq, ftype) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const src = audioCtx.createBufferSource(); src.buffer = noiseBuffer();
+  const g = audioCtx.createGain(), f = audioCtx.createBiquadFilter();
+  f.type = ftype || 'lowpass'; f.frequency.value = freq || 1000;
+  g.gain.setValueAtTime(vol || 0.1, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  src.connect(f); f.connect(g); g.connect(audioCtx.destination);
+  src.start(t); src.stop(t + dur + 0.02);
+}
 const sfx = {
   collect() { beep(880, 0.12, 'sine', 0.18); beep(1320, 0.18, 'sine', 0.15, 0.08); },
   powerup() { [660, 990, 1320, 1760].forEach((f, i) => beep(f, 0.18, 'triangle', 0.16, i * 0.05)); },
   hit() { beep(160, 0.25, 'square', 0.12); beep(110, 0.3, 'square', 0.1, 0.08); },
   attack() { beep(300, 0.08, 'sawtooth', 0.12); beep(180, 0.12, 'square', 0.1, 0.03); },
+  // 武器ごとの発射音
+  shoot() { beep(960, 0.05, 'triangle', 0.14); beep(620, 0.08, 'square', 0.09, 0.02); },
+  laserZap() { sweep(1500, 320, 0.16, 'sawtooth', 0.13); beep(1800, 0.04, 'square', 0.06); },
+  bombLaunch() { beep(220, 0.1, 'sine', 0.15); sweep(180, 60, 0.18, 'sine', 0.12, 0.02); },
+  flameWhoosh() { noiseBurst(0.24, 0.12, 900, 'lowpass'); beep(340, 0.1, 'sawtooth', 0.05); },
   smash() { beep(220, 0.15, 'square', 0.14); beep(140, 0.2, 'sawtooth', 0.12, 0.04); beep(660, 0.1, 'triangle', 0.1, 0.02); },
   goal() {
     [523, 659, 784, 1047, 1319].forEach((f, i) => beep(f, 0.35, 'triangle', 0.18, i * 0.15));
@@ -102,6 +132,12 @@ const sfx = {
   start() { beep(660, 0.1, 'sine', 0.15); beep(880, 0.15, 'sine', 0.15, 0.1); },
   heart() { beep(440, 0.15, 'triangle', 0.12); }
 };
+function playWeaponSound(id) {
+  if (id === 'laser') sfx.laserZap();
+  else if (id === 'bomb') sfx.bombLaunch();
+  else if (id === 'flame') sfx.flameWhoosh();
+  else sfx.shoot();   // ノーマル・散弾
+}
 
 // ---------- 音楽（スーパーファミコン風チップチューン） ----------
 function noteFreq(n) {
@@ -268,7 +304,8 @@ let pressing = false;
 const STAGES = [
   { id: 'grass', name: 'くさはら', emoji: '🌳', sky: ['#7EC8F0', '#BDE8FF', '#E8F9E8'], ground: '#7BC47F', ground2: '#5FAE63', decor: 'tree' },
   { id: 'sea', name: 'うみ', emoji: '🌊', sky: ['#7FC7F5', '#BEE9FF', '#DFF6FF'], ground: '#2E9BD6', ground2: '#1C7FB4', decor: 'island', water: true },
-  { id: 'volcano', name: 'かざん', emoji: '🌋', sky: ['#3A1B2E', '#7E2E1E', '#E0742E'], ground: '#33231F', ground2: '#6E2A18', decor: 'volcano', lava: true }
+  { id: 'volcano', name: 'かざん', emoji: '🌋', sky: ['#3A1B2E', '#7E2E1E', '#E0742E'], ground: '#33231F', ground2: '#6E2A18', decor: 'volcano', lava: true },
+  { id: 'space', name: 'うちゅう', emoji: '🚀', sky: ['#05061A', '#141642', '#2E2360'], ground: '#3A3552', ground2: '#26223A', decor: 'space' }
 ];
 let stageIndex = 0;
 
@@ -309,8 +346,9 @@ let level = 0;           // パワーアップ回数
 let obstacles = [];      // {x, type, h, w, passed}
 let items = [];          // {x, y, taken, bob}
 let clouds = [];
-let trees = [];          // 遠景の飾り（木/島/火山）
-let houses = [];         // 建物（家・灯台・小屋）
+let trees = [];          // 遠景の飾り（木/島/火山/惑星）
+let houses = [];         // 建物（家・灯台・小屋・ロケット）
+let stars = [];          // 宇宙ステージの星
 let particles = [];
 let confetti = [];
 let shake = 0;
@@ -367,10 +405,15 @@ function courseSetup() {
   for (let i = 0; i < 14; i++) {
     trees.push({ x: Math.random() * W * 3, s: 0.6 + Math.random() * 0.7 });
   }
-  // 建物（家・灯台・小屋）を点々と配置
+  // 建物（家・灯台・小屋・ロケット）を点々と配置
   houses = [];
   for (let i = 0; i < 5; i++) {
     houses.push({ x: W * (0.6 + i) + Math.random() * W * 0.5, s: 0.8 + Math.random() * 0.5, kind: i % 3 });
+  }
+  // 宇宙ステージの星
+  stars = [];
+  for (let i = 0; i < 55; i++) {
+    stars.push({ x: Math.random() * W, y: Math.random() * H * 0.82, r: 0.6 + Math.random() * 1.8, tw: Math.random() * 6 });
   }
 }
 
@@ -528,13 +571,12 @@ function doAttack() {
   if (!(state === STATE.PLAY || bossReady)) return;
   beetle.atkCd = beetle.atkCdBase;
   beetle.atkAnim = 0.3;
-  sfx.attack();
   const ox = beetle.x + beetle.size * 2, oy = beetle.y;
   const dmg = 1 + Math.floor(level / 2);
-  // 持っている武器をすべて同時に発射（消えずに加算されていく）
+  // 持っている武器をすべて同時に発射（消えずに加算されていく）＋それぞれの発射音
   for (const id in beetle.weapons) {
     const lv = beetle.weapons[id];
-    if (lv > 0) fireWeapon(id, lv, ox, oy, dmg);
+    if (lv > 0) { fireWeapon(id, lv, ox, oy, dmg); playWeaponSound(id); }
   }
 }
 
@@ -559,17 +601,20 @@ function startStage(idx) {
   sfx.start();
   Music.start('main');
 }
-// 3枚のカードの配置（縦持ちは縦並び、横持ちは横並び）
+// n枚のカードの配置（枚数に合わせてサイズを自動調整）
 function cardRects(n) {
   const rects = [];
   const landscape = W > H * 1.15;
   if (landscape) {
-    const cw = Math.min(W * 0.27, H * 0.7), ch = H * 0.52, gap = W * 0.03;
-    const total = n * cw + (n - 1) * gap, x0 = (W - total) / 2, y = H * 0.34;
+    const gap = W * 0.02;
+    const cw = Math.min(H * 0.66, (W * 0.94 - gap * (n - 1)) / n), ch = H * 0.52, y = H * 0.34;
+    const total = n * cw + (n - 1) * gap, x0 = (W - total) / 2;
     for (let i = 0; i < n; i++) rects.push({ x: x0 + i * (cw + gap), y, w: cw, h: ch });
   } else {
-    const cw = W * 0.74, ch = Math.min(H * 0.15, W * 0.32), gap = H * 0.025;
-    const total = n * ch + (n - 1) * gap, x = (W - cw) / 2, y0 = H * 0.36;
+    const cw = W * 0.74, gap = H * 0.02;
+    const areaTop = H * 0.3, areaBot = H * 0.9;
+    const ch = Math.min(H * 0.15, (areaBot - areaTop - gap * (n - 1)) / n);
+    const total = n * ch + (n - 1) * gap, x = (W - cw) / 2, y0 = areaTop + ((areaBot - areaTop) - total) / 2;
     for (let i = 0; i < n; i++) rects.push({ x, y: y0 + i * (ch + gap), w: cw, h: ch });
   }
   return rects;
@@ -1023,6 +1068,11 @@ function updateDecor(dt, mul) {
     hs.x -= speed * 0.5 * hs.s * dt * mul;
     if (hs.x < -W * 0.3) { hs.x = W + W * 0.2 + Math.random() * W * 0.7; }
   }
+  for (const st of stars) {
+    st.x -= speed * 0.1 * dt * mul;
+    if (st.x < 0) st.x += W;
+    st.tw += dt * 3;
+  }
 }
 
 function burstParticles(x, y, color, n) {
@@ -1185,21 +1235,39 @@ function drawBackground() {
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, W, H);
 
-  // 太陽／月
-  ctx.fillStyle = bossArena ? '#F2C24B' : (stg.lava ? '#FFB94D' : '#FFE873');
-  ctx.beginPath();
-  ctx.arc(W * 0.85, H * 0.13, Math.min(W, H) * 0.07, 0, Math.PI * 2);
-  ctx.fill();
+  const space = !bossArena && stg.id === 'space';
 
-  // 雲
-  ctx.fillStyle = stg.lava && !bossArena ? 'rgba(90,60,70,0.5)' : 'rgba(255,255,255,0.9)';
-  for (const c of clouds) {
-    const s = c.s * Math.min(W, H) * 0.05;
+  // 宇宙は星をちりばめる
+  if (space) {
+    for (const st of stars) {
+      ctx.globalAlpha = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(st.tw));
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath(); ctx.arc(st.x, st.y, st.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // 太陽／月／惑星
+  if (space) {
+    drawRingPlanet(W * 0.82, H * 0.15, Math.min(W, H) * 0.09);
+  } else {
+    ctx.fillStyle = bossArena ? '#F2C24B' : (stg.lava ? '#FFB94D' : '#FFE873');
     ctx.beginPath();
-    ctx.arc(c.x, c.y, s, 0, Math.PI * 2);
-    ctx.arc(c.x + s * 0.9, c.y - s * 0.3, s * 0.8, 0, Math.PI * 2);
-    ctx.arc(c.x + s * 1.8, c.y, s * 0.9, 0, Math.PI * 2);
+    ctx.arc(W * 0.85, H * 0.13, Math.min(W, H) * 0.07, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  // 雲（宇宙では出さない）
+  if (!space) {
+    ctx.fillStyle = stg.lava && !bossArena ? 'rgba(90,60,70,0.5)' : 'rgba(255,255,255,0.9)';
+    for (const c of clouds) {
+      const s = c.s * Math.min(W, H) * 0.05;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, s, 0, Math.PI * 2);
+      ctx.arc(c.x + s * 0.9, c.y - s * 0.3, s * 0.8, 0, Math.PI * 2);
+      ctx.arc(c.x + s * 1.8, c.y, s * 0.9, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   // 遠景の飾りと建物（ボス戦では出さない）
@@ -1208,18 +1276,65 @@ function drawBackground() {
       const s = t.s * Math.min(W, H) * 0.09;
       if (stg.decor === 'island') drawIsland(t.x, groundY, s);
       else if (stg.decor === 'volcano') drawVolcanoCone(t.x, groundY, s);
+      else if (stg.decor === 'space') drawSpacePlanet(t.x, groundY, s, t.s);
       else drawTreeCone(t.x, groundY, s, t.s);
     }
     for (const hs of houses) {
       const s = hs.s * Math.min(W, H) * 0.11;
       if (stg.id === 'sea') drawLighthouse(hs.x, groundY, s, hs.kind);
       else if (stg.id === 'volcano') drawHut(hs.x, groundY, s, hs.kind);
+      else if (stg.id === 'space') drawRocket(hs.x, groundY, s, hs.kind);
       else drawHouse(hs.x, groundY, s, hs.kind);
     }
   }
 
   // 地面
   drawGround(stg, bossArena, groundY);
+}
+
+// 宇宙：リングのある惑星
+function drawRingPlanet(x, y, r) {
+  ctx.strokeStyle = 'rgba(255,220,150,0.55)'; ctx.lineWidth = r * 0.14;
+  ctx.beginPath(); ctx.ellipse(x, y, r * 1.7, r * 0.55, -0.4, Math.PI * 0.15, Math.PI * 1.15); ctx.stroke();
+  const g = ctx.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.2, x, y, r);
+  g.addColorStop(0, '#FFE1A8'); g.addColorStop(0.5, '#E8A24A'); g.addColorStop(1, '#8A4A2A');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,220,150,0.55)'; ctx.lineWidth = r * 0.14;
+  ctx.beginPath(); ctx.ellipse(x, y, r * 1.7, r * 0.55, -0.4, Math.PI * 1.15, Math.PI * 0.15 + Math.PI * 2); ctx.stroke();
+}
+// 宇宙：遠くの惑星／小惑星
+function drawSpacePlanet(x, gy, s, sc) {
+  const idx = Math.floor(sc * 97) % 4;
+  const cols = [['#F0946A', '#6A2A20'], ['#5AB0F0', '#183A6A'], ['#A88AE8', '#3A2060'], ['#5AD0A8', '#1A5A44']];
+  const cy = gy - s * 0.6;
+  const g = ctx.createRadialGradient(x - s * 0.4, cy - s * 0.4, s * 0.2, x, cy, s * 1.2);
+  g.addColorStop(0, '#FFFFFF'); g.addColorStop(0.35, cols[idx][0]); g.addColorStop(1, cols[idx][1]);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, cy, s * 1.1, 0, Math.PI * 2); ctx.fill();
+  // クレーター
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.beginPath(); ctx.arc(x + s * 0.3, cy + s * 0.2, s * 0.22, 0, Math.PI * 2); ctx.arc(x - s * 0.35, cy + s * 0.35, s * 0.14, 0, Math.PI * 2); ctx.fill();
+}
+// 宇宙：ロケット
+function drawRocket(x, gy, s, kind) {
+  const bh = s * 1.7, bw = s * 0.55;
+  ctx.fillStyle = '#EBEFF5';
+  ctx.beginPath();
+  ctx.moveTo(x, gy - bh - s * 0.5);
+  ctx.quadraticCurveTo(x - bw, gy - bh * 0.7, x - bw * 0.7, gy - bh * 0.28);
+  ctx.lineTo(x - bw * 0.7, gy);
+  ctx.lineTo(x + bw * 0.7, gy);
+  ctx.lineTo(x + bw * 0.7, gy - bh * 0.28);
+  ctx.quadraticCurveTo(x + bw, gy - bh * 0.7, x, gy - bh - s * 0.5);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#5BC0FF';
+  ctx.beginPath(); ctx.arc(x, gy - bh * 0.62, s * 0.22, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#E8433B';
+  ctx.beginPath(); ctx.moveTo(x - bw * 0.7, gy - bh * 0.22); ctx.lineTo(x - bw * 1.35, gy); ctx.lineTo(x - bw * 0.7, gy); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(x + bw * 0.7, gy - bh * 0.22); ctx.lineTo(x + bw * 1.35, gy); ctx.lineTo(x + bw * 0.7, gy); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#FFB03B';
+  ctx.beginPath(); ctx.moveTo(x - bw * 0.4, gy); ctx.lineTo(x, gy + s * 0.55); ctx.lineTo(x + bw * 0.4, gy); ctx.closePath(); ctx.fill();
 }
 
 function drawTreeCone(x, gy, s, sc) {
@@ -1310,6 +1425,18 @@ function drawGround(stg, boss, groundY) {
     ctx.beginPath();
     for (let x = off - 90; x < W + 90; x += 90) { ctx.moveTo(x, groundY + 8); ctx.lineTo(x + 22, groundY + 20); ctx.lineTo(x + 45, groundY + 6); ctx.lineTo(x + 70, groundY + 22); }
     ctx.stroke();
+  } else if (stg.id === 'space') {
+    ctx.fillStyle = stg.ground; ctx.fillRect(0, groundY, W, H - groundY);
+    // 月面の光るふち
+    ctx.strokeStyle = 'rgba(150,180,255,0.5)'; ctx.lineWidth = Math.min(W, H) * 0.008;
+    ctx.beginPath(); ctx.moveTo(0, groundY); ctx.lineTo(W, groundY); ctx.stroke();
+    // クレーター
+    ctx.fillStyle = stg.ground2;
+    const off = -(scrollX * 0.9) % 90;
+    for (let x = off; x < W + 90; x += 90) {
+      ctx.beginPath(); ctx.ellipse(x, groundY + (H - groundY) * 0.45, 24, 9, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(x + 45, groundY + (H - groundY) * 0.7, 14, 6, 0, 0, Math.PI * 2); ctx.fill();
+    }
   } else {
     ctx.fillStyle = stg.ground; ctx.fillRect(0, groundY, W, H - groundY);
     ctx.fillStyle = stg.ground2;

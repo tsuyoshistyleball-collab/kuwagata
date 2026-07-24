@@ -127,6 +127,7 @@ const sfx = {
   flameWhoosh() { noiseBurst(0.24, 0.12, 900, 'lowpass'); beep(340, 0.1, 'sawtooth', 0.05); },
   swordThrow() { noiseBurst(0.12, 0.08, 3500, 'highpass'); sweep(1600, 900, 0.14, 'triangle', 0.1); beep(2000, 0.05, 'triangle', 0.07, 0.06); },
   gunShot() { noiseBurst(0.05, 0.16, 1800, 'lowpass'); beep(180, 0.07, 'square', 0.14); beep(90, 0.1, 'sine', 0.1, 0.02); },
+  special() { [523, 659, 784, 1047].forEach((f, i) => beep(f, 0.2, 'triangle', 0.18, i * 0.04)); sweep(400, 1600, 0.3, 'sawtooth', 0.12); },
   smash() { beep(220, 0.15, 'square', 0.14); beep(140, 0.2, 'sawtooth', 0.12, 0.04); beep(660, 0.1, 'triangle', 0.1, 0.02); },
   goal() {
     [523, 659, 784, 1047, 1319].forEach((f, i) => beep(f, 0.35, 'triangle', 0.18, i * 0.15));
@@ -365,6 +366,8 @@ let enemies = [];        // 道中の敵キャラ
 let shots = [];          // 弾 {x,y,vx,vy,r,side,dmg,color,spin,pierce}
 let bossBanner = 0;      // 「ボスとうじょう！」表示
 let nextBossT = 0;       // 次のボス（宇宙人）が出るまでの待ち時間
+const SPECIAL_MAX = 10;  // 必殺技ゲージの回復時間（秒）
+let specialCd = 0;       // 必殺技のクールダウン（0で使える）
 const boss = {
   active: false, defeated: false, type: 'robot',   // 'robot' | 'alien'
   x: 0, y: 0, size: 0,
@@ -452,6 +455,7 @@ function resetGame() {
   boss.type = 'robot';
   bossBanner = 0;
   nextBossT = 0;
+  specialCd = 0;
   shake = 0;
   courseSetup();
 }
@@ -475,6 +479,16 @@ function inMusicButton(x, y) {
   const b = musicButton();
   const dx = x - b.x, dy = y - b.y;
   return dx * dx + dy * dy <= (b.r * 1.35) * (b.r * 1.35);
+}
+// ---------- 必殺技ボタン（左下） ----------
+function specialButton() {
+  const r = Math.min(W, H) * 0.09;
+  return { x: r + Math.min(W, H) * 0.04, y: H - r - Math.min(W, H) * 0.05, r };
+}
+function inSpecialButton(x, y) {
+  const b = specialButton();
+  const dx = x - b.x, dy = y - b.y;
+  return dx * dx + dy * dy <= (b.r * 1.2) * (b.r * 1.2);
 }
 
 // 障害物を壊す（配列インデックス指定）
@@ -517,9 +531,10 @@ function fireShot(x, y, side, dmg, color, pierce, opts) {
     else if (kind === 'gun') sp = base * 1.5;          // 銃は速い
     vx = Math.cos(ang) * sp; vy = Math.sin(ang) * sp;
     if (kind === 'bomb') vy -= H * 0.32;               // 山なりに投げる
+    if (kind === 'sword') { vx = 0; vy = 0; }          // 剣は最初は空中で溜める
   } else { vx = -base; }
   let r = beetle.size * 0.34;
-  if (side === 'player') r = beetle.size * (kind === 'bomb' ? 0.55 : kind === 'laser' ? 0.32 : kind === 'flame' ? 0.5 : kind === 'sword' ? 0.46 : kind === 'gun' ? 0.3 : 0.4 + Math.min(level, 12) * 0.02);
+  if (side === 'player') r = beetle.size * (kind === 'bomb' ? 0.55 : kind === 'laser' ? 0.32 : kind === 'flame' ? 0.5 : kind === 'sword' ? 0.46 : kind === 'gun' ? 0.42 : 0.4 + Math.min(level, 12) * 0.02);
   shots.push({
     x, y, r, vx, vy, side, dmg,
     color: color || (side === 'player' ? '#FFE873' : '#FF5B6E'),
@@ -527,7 +542,8 @@ function fireShot(x, y, side, dmg, color, pierce, opts) {
     fuse: kind === 'bomb' ? 0.85 : 0,
     life: kind === 'flame' ? 0.34 : 0,                 // 炎は短時間で消える＝短射程
     grow: kind === 'flame' ? 1 + Math.random() * 0.5 : 1,
-    flick: Math.random() * 6
+    hover: kind === 'sword' ? 0.4 : 0,                 // 剣が空中で溜める時間
+    bobY: 0, flick: Math.random() * 6
   });
   if (side === 'player' && kind !== 'flame') burstParticles(x, y, '#FFF3B0', 4);
 }
@@ -653,6 +669,8 @@ function pointerDown(id, x, y) {
     return;
   }
   if (inMusicButton(x, y)) { Music.toggle(); return; }   // 音楽ON/OFF
+  // 必殺技ボタン（プレイ中・ボス戦）
+  if ((state === STATE.PLAY || state === STATE.BOSS) && inSpecialButton(x, y)) { triggerSpecial(); return; }
   if (tryStart()) return;             // タイトル等はどこを押しても次へ
   if (inButton(x, y)) {
     pointers.set(id, 'atk');
@@ -734,6 +752,7 @@ function update(dt) {
   if (beetle.invincible > 0) beetle.invincible -= dt;
   if (beetle.atkCd > 0) beetle.atkCd -= dt;
   if (beetle.atkAnim > 0) beetle.atkAnim -= dt;
+  if (specialCd > 0) specialCd -= dt;
   if (shake > 0) shake -= dt * 3;
 
   // 攻撃ボタンを押しっぱなしにすると連続で攻撃
@@ -837,30 +856,84 @@ function addCompanion() {
   companions.push({
     type: types[i % types.length],
     x: beetle.x, y: beetle.y,
-    idx: i, atkCd: 0.6 + Math.random() * 0.6, t: Math.random() * Math.PI * 2, wing: 0
+    idx: i, atkCd: 0.6 + Math.random() * 0.6, t: Math.random() * Math.PI * 2, wing: 0,
+    mode: 'orbit'   // orbit / dashOut / dashBack（必殺技）
   });
+}
+function companionOrbitPos(c, n) {
+  const ang = c.t * 1.5 + c.idx * (Math.PI * 2 / Math.max(1, n));
+  const rad = beetle.size * (2.3 + (c.idx % 3) * 0.55);
+  return { x: beetle.x - beetle.size * 0.5 + Math.cos(ang) * rad, y: beetle.y + Math.sin(ang) * rad * 0.7 };
+}
+// 必殺技の一撃（着弾地点にダメージ）
+function companionSpecialHit(x, y) {
+  burstParticles(x, y, '#FFF3A0', 16);
+  burstParticles(x, y, '#8AF0FF', 10);
+  shake = Math.max(shake, 0.5);
+  sfx.smash();
+  const R = Math.min(W, H) * 0.16;
+  const dmg = 6 + level * 2;
+  if (boss.active && !boss.defeated && boss.introT <= 0) {
+    const dx = x - boss.x, dy = y - boss.y;
+    if (dx * dx + dy * dy < (R + boss.size) * (R + boss.size)) { boss.hp -= dmg; boss.hurt = 0.2; if (boss.hp <= 0) bossDefeated(); }
+  }
+  for (let j = enemies.length - 1; j >= 0; j--) {
+    const e = enemies[j], ex = e.x - scrollX;
+    if ((x - ex) ** 2 + (y - e.y) ** 2 < R * R) { e.hp -= dmg; e.hurt = 0.15; if (e.hp <= 0) { burstParticles(ex, e.y, '#C060E8', 18); enemies.splice(j, 1); } }
+  }
+  // 敵弾も消す
+  for (const o of shots) if (o.side === 'enemy' && (x - o.x) ** 2 + (y - o.y) ** 2 < R * R) o.dead = true;
+}
+// 必殺技：仲間が敵へ突撃して戻る
+function triggerSpecial() {
+  if (specialCd > 0) return;
+  if (state !== STATE.PLAY && state !== STATE.BOSS) return;
+  specialCd = SPECIAL_MAX;
+  sfx.special();
+  burstParticles(beetle.x, beetle.y, '#FFF3A0', 20);
+  for (const c of companions) { c.mode = 'dashOut'; }
+  // 仲間がいなくても、必殺の光弾を前方へ放つ
+  if (companions.length === 0) {
+    const t = playerTargetPos(beetle.x, beetle.y);
+    const base = Math.atan2(t.y - beetle.y, t.x - beetle.x);
+    for (let i = 0; i < 8; i++) fireShot(beetle.x + beetle.size, beetle.y, 'player', 5 + level, '#FFF3A0', 3, { angle: base - Math.atan2(0, 1) + (i - 3.5) * 0.12 });
+  }
 }
 function updateCompanions(dt) {
   const n = companions.length;
   for (const c of companions) {
-    c.t += dt;
     c.wing += dt * 30;
-    // クワガタの周りをまわる
-    const ang = c.t * 1.5 + c.idx * (Math.PI * 2 / Math.max(1, n));
-    const rad = beetle.size * (2.3 + (c.idx % 3) * 0.55);
-    const tx = beetle.x - beetle.size * 0.5 + Math.cos(ang) * rad;
-    const ty = beetle.y + Math.sin(ang) * rad * 0.7;
-    c.x += (tx - c.x) * Math.min(1, dt * 8);
-    c.y += (ty - c.y) * Math.min(1, dt * 8);
+
+    if (c.mode === 'dashOut') {
+      const t = playerTargetPos(c.x, c.y);
+      const dx = t.x - c.x, dy = t.y - c.y, d = Math.hypot(dx, dy) || 1;
+      const sp = Math.max(W, H) * 1.7;
+      c.x += dx / d * sp * dt; c.y += dy / d * sp * dt;
+      if (Math.random() < 0.5) burstParticles(c.x, c.y, '#FFF3A0', 2);
+      if (d < beetle.size * 1.6) { companionSpecialHit(c.x, c.y); c.mode = 'dashBack'; }
+      continue;
+    }
+    if (c.mode === 'dashBack') {
+      const p = companionOrbitPos(c, n);
+      const dx = p.x - c.x, dy = p.y - c.y, d = Math.hypot(dx, dy) || 1;
+      const sp = Math.max(W, H) * 1.5;
+      c.x += dx / d * sp * dt; c.y += dy / d * sp * dt;
+      if (d < beetle.size * 0.6) c.mode = 'orbit';
+      continue;
+    }
+
+    // 通常：クワガタの周りをまわる
+    c.t += dt;
+    const p = companionOrbitPos(c, n);
+    c.x += (p.x - c.x) * Math.min(1, dt * 8);
+    c.y += (p.y - c.y) * Math.min(1, dt * 8);
 
     c.atkCd -= dt;
     if (c.atkCd <= 0) {
-      // 通常ステージもボスステージも同じ仕様：仲間も前方へ弾を撃つ
       const bossNotReady = state === STATE.BOSS && (!boss.active || boss.defeated || boss.introT > 0);
       if (bossNotReady) {
-        c.atkCd = 0.4;   // ボス登場前は撃たない
+        c.atkCd = 0.4;
       } else {
-        // 仲間の攻撃を強化：威力アップ・貫通・連射を速く
         const cdmg = 3 + Math.floor(level / 2);
         fireShot(c.x, c.y, 'player', cdmg, '#FF8A5B', 2);
         c.atkCd = 0.7;
@@ -983,13 +1056,40 @@ function updateEnemies(dt) {
   }
 }
 
+// プレイヤーの弾のねらう相手（ボス→近い敵→前方）
+function playerTargetPos(fromX, fromY) {
+  if (boss.active && !boss.defeated && boss.introT <= 0) return { x: boss.x, y: boss.y };
+  let best = null, bd = 1e9;
+  for (const e of enemies) {
+    const ex = e.x - scrollX;
+    if (ex > fromX - beetle.size && ex < W + 60) { const d = ex - fromX; if (d < bd) { bd = d; best = { x: ex, y: e.y }; } }
+  }
+  if (best) return best;
+  return { x: fromX + Math.max(W, H), y: fromY };
+}
 function updateShots(dt) {
   const groundY = H * 0.88;
-  // 移動＆画面外判定（爆弾は山なり＆時限式）
+  // 移動＆画面外判定（爆弾は山なり＆時限式、剣は溜めてからダッシュ）
   for (const s of shots) {
     if (s.kind === 'bomb') { s.vy += H * 0.9 * dt; s.fuse -= dt; }
     if (s.kind === 'flame') { s.life -= dt; s.grow += dt * 2.5; if (s.life <= 0) s.dead = true; }   // 炎は短時間で消える
-    s.x += s.vx * dt; s.y += s.vy * dt; s.spin += dt * 12;
+    if (s.kind === 'sword') {
+      s.spin += dt * 20;                               // くるくる回る
+      if (s.hover > 0) {
+        s.hover -= dt;
+        s.bobY = (s.bobY || 0) + dt;
+        s.y += Math.sin(s.bobY * 8) * 0.6;             // 空中でふわふわ
+        if (s.hover <= 0) {                            // 溜め終わり → 敵へダッシュ
+          const t = playerTargetPos(s.x, s.y);
+          const a = Math.atan2(t.y - s.y, t.x - s.x), sp = Math.max(W, H) * 1.4;
+          s.vx = Math.cos(a) * sp; s.vy = Math.sin(a) * sp;
+          burstParticles(s.x, s.y, '#DCE6F5', 6);
+        }
+      }
+    } else {
+      s.spin += dt * 12;
+    }
+    s.x += s.vx * dt; s.y += s.vy * dt;
     if (s.x < -80 || s.x > W + 80 || s.y < -80 || s.y > H + 80) s.dead = true;
   }
   for (const s of shots) {
@@ -1074,6 +1174,7 @@ function updateBoss(dt) {
   if (beetle.invincible > 0) beetle.invincible -= dt;
   if (beetle.atkCd > 0) beetle.atkCd -= dt;
   if (beetle.atkAnim > 0) beetle.atkAnim -= dt;
+  if (specialCd > 0) specialCd -= dt;
   if (shake > 0) shake -= dt * 3;
   if (boss.hurt > 0) boss.hurt -= dt;
   if (bossBanner > 0) bossBanner -= dt;
@@ -1203,6 +1304,7 @@ function draw() {
   }
   drawHUD();
   drawAttackButton();
+  drawSpecialButton();
   drawMusicButton();
 
   ctx.restore();
@@ -1798,17 +1900,30 @@ function drawShots() {
       ctx.fillStyle = '#E0A62A';
       ctx.beginPath(); ctx.arc(-L * 0.9, 0, w * 0.7, 0, Math.PI * 2); ctx.fill();
     } else if (s.side === 'player' && s.kind === 'gun') {
-      // 銃の弾（金色の細長い弾＋しっぽ）
+      // 銃の弾（派手：オレンジの光の尾＋白く光る弾芯）
       const ang = Math.atan2(s.vy, s.vx);
       ctx.rotate(ang);
-      ctx.fillStyle = 'rgba(255,220,120,0.5)';
-      ctx.beginPath(); ctx.ellipse(-s.r * 1.9, 0, s.r * 1.4, s.r * 0.3, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#C89020';
-      ctx.beginPath(); ctx.ellipse(-s.r * 0.6, 0, s.r * 0.7, s.r * 0.72, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#F2C84E';
-      ctx.beginPath(); ctx.ellipse(s.r * 0.1, 0, s.r * 1.5, s.r * 0.7, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#FFF6D0';
-      ctx.beginPath(); ctx.arc(s.r * 1.3, 0, s.r * 0.42, 0, Math.PI * 2); ctx.fill();
+      // 光の尾（長め・グラデ）
+      const tg = ctx.createLinearGradient(-s.r * 4.5, 0, s.r * 1.5, 0);
+      tg.addColorStop(0, 'rgba(255,180,40,0)');
+      tg.addColorStop(0.6, 'rgba(255,200,70,0.55)');
+      tg.addColorStop(1, 'rgba(255,245,200,0.9)');
+      ctx.fillStyle = tg;
+      ctx.beginPath(); ctx.ellipse(-s.r * 1.7, 0, s.r * 3.4, s.r * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+      // 外側グロー
+      const gg = ctx.createRadialGradient(0, 0, s.r * 0.3, 0, 0, s.r * 2.0);
+      gg.addColorStop(0, 'rgba(255,240,180,0.9)');
+      gg.addColorStop(1, 'rgba(255,160,40,0)');
+      ctx.fillStyle = gg;
+      ctx.beginPath(); ctx.arc(0, 0, s.r * 2.0, 0, Math.PI * 2); ctx.fill();
+      // 弾芯（オレンジ→白）
+      ctx.fillStyle = '#FF9A2B';
+      ctx.beginPath(); ctx.ellipse(0, 0, s.r * 1.5, s.r * 0.85, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath(); ctx.ellipse(s.r * 0.5, 0, s.r * 0.8, s.r * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+      // キラッと火花
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = s.r * 0.18;
+      ctx.beginPath(); ctx.moveTo(s.r * 1.6, -s.r * 0.7); ctx.lineTo(s.r * 2.4, -s.r * 1.2); ctx.moveTo(s.r * 1.6, s.r * 0.7); ctx.lineTo(s.r * 2.4, s.r * 1.2); ctx.stroke();
     } else if (s.side === 'player') {
       // 光の弾（通常・散弾）
       const g = ctx.createRadialGradient(0, 0, s.r * 0.2, 0, 0, s.r * 1.4);
@@ -2068,6 +2183,41 @@ function drawAttackButton() {
     ctx.arc(b.x, b.y, b.r * 0.72, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
     ctx.stroke();
   }
+}
+
+function drawSpecialButton() {
+  if (state !== STATE.PLAY && state !== STATE.BOSS) return;
+  const b = specialButton();
+  const ready = specialCd <= 0;
+  const frac = ready ? 1 : (1 - specialCd / SPECIAL_MAX);
+  // 影
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.beginPath(); ctx.arc(b.x, b.y + b.r * 0.08, b.r, 0, Math.PI * 2); ctx.fill();
+  // 本体（ためると明るくなる）
+  const g = ctx.createRadialGradient(b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.2, b.x, b.y, b.r);
+  g.addColorStop(0, ready ? '#8AE0FF' : '#6A7A9A');
+  g.addColorStop(1, ready ? '#4D7BE8' : '#3A4560');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
+  // ゲージ（下地＋たまり具合）
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = b.r * 0.14;
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 0.78, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = ready ? '#FFE24A' : '#8ED0FF'; ctx.lineWidth = b.r * 0.14;
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 0.78, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2); ctx.stroke();
+  // ふち（使えるときは光る）
+  ctx.strokeStyle = ready ? '#FFF3A0' : 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = b.r * (ready ? 0.1 : 0.06);
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 0.98, 0, Math.PI * 2); ctx.stroke();
+  // アイコン
+  ctx.globalAlpha = ready ? 1 : 0.6;
+  ctx.font = `${b.r * 0.9}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('⭐', b.x, b.y - b.r * 0.08);
+  ctx.globalAlpha = 1;
+  // ラベル
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${b.r * 0.34}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
+  ctx.fillText('ひっさつ', b.x, b.y + b.r * 0.55);
 }
 
 function drawMusicButton() {
@@ -2501,6 +2651,9 @@ if (typeof location !== 'undefined' && location.search.indexOf('debug') >= 0) {
     setLevel(n) { level = n; beetle.power = n; },
     setJellies(n) { jellies = n; },
     setWeapon(w) { beetle.weapons[w] = (beetle.weapons[w] || 0) + 1; },
+    special() { triggerSpecial(); },
+    get specialCd() { return specialCd; },
+    get companionModes() { return companions.map(c => c.mode); },
     getWeapons() { return Object.assign({}, beetle.weapons); },
     forceLevelUp() { exp = expToNext; triggerLevelUp(); },
     pickChoice(i) { if (levelChoices[i]) applyUpgrade(levelChoices[i]); },

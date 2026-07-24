@@ -368,6 +368,10 @@ let bossBanner = 0;      // 「ボスとうじょう！」表示
 let nextBossT = 0;       // 次のボス（宇宙人）が出るまでの待ち時間
 const SPECIAL_MAX = 10;  // 必殺技ゲージの回復時間（秒）
 let specialCd = 0;       // 必殺技のクールダウン（0で使える）
+let specialActive = false;  // 必殺技の演出中
+let specialT = 0;           // 演出の経過時間
+let specialTX = 0, specialTY = 0;   // ねらう地点
+let specialFx = 0;          // 発動フラッシュ
 const boss = {
   active: false, defeated: false, type: 'robot',   // 'robot' | 'alien'
   x: 0, y: 0, size: 0,
@@ -456,6 +460,9 @@ function resetGame() {
   bossBanner = 0;
   nextBossT = 0;
   specialCd = 0;
+  specialActive = false;
+  specialT = 0;
+  specialFx = 0;
   shake = 0;
   courseSetup();
 }
@@ -753,11 +760,13 @@ function update(dt) {
   if (beetle.atkCd > 0) beetle.atkCd -= dt;
   if (beetle.atkAnim > 0) beetle.atkAnim -= dt;
   if (specialCd > 0) specialCd -= dt;
+  if (specialFx > 0) specialFx -= dt;
   if (shake > 0) shake -= dt * 3;
 
   // 攻撃ボタンを押しっぱなしにすると連続で攻撃
   if (attackHeld() && beetle.atkCd <= 0) doAttack();
 
+  if (specialActive) updateSpecial(dt);
   updateCompanions(dt);
   updateEnemies(dt);
   updateShots(dt);
@@ -865,64 +874,83 @@ function companionOrbitPos(c, n) {
   const rad = beetle.size * (2.3 + (c.idx % 3) * 0.55);
   return { x: beetle.x - beetle.size * 0.5 + Math.cos(ang) * rad, y: beetle.y + Math.sin(ang) * rad * 0.7 };
 }
-// 必殺技の一撃（着弾地点にダメージ）
+// 必殺技の一撃（着弾地点に大ダメージ＋衝撃リング）
 function companionSpecialHit(x, y) {
-  burstParticles(x, y, '#FFF3A0', 16);
-  burstParticles(x, y, '#8AF0FF', 10);
-  shake = Math.max(shake, 0.5);
+  burstParticles(x, y, '#FFF3A0', 24);
+  burstParticles(x, y, '#8AF0FF', 16);
+  burstParticles(x, y, '#FFFFFF', 12);
+  shake = Math.max(shake, 0.8);
   sfx.smash();
-  const R = Math.min(W, H) * 0.16;
+  const R = Math.min(W, H) * 0.18;
   const dmg = 6 + level * 2;
   if (boss.active && !boss.defeated && boss.introT <= 0) {
     const dx = x - boss.x, dy = y - boss.y;
-    if (dx * dx + dy * dy < (R + boss.size) * (R + boss.size)) { boss.hp -= dmg; boss.hurt = 0.2; if (boss.hp <= 0) bossDefeated(); }
+    if (dx * dx + dy * dy < (R + boss.size) * (R + boss.size)) { boss.hp -= dmg; boss.hurt = 0.25; if (boss.hp <= 0) bossDefeated(); }
   }
   for (let j = enemies.length - 1; j >= 0; j--) {
     const e = enemies[j], ex = e.x - scrollX;
     if ((x - ex) ** 2 + (y - e.y) ** 2 < R * R) { e.hp -= dmg; e.hurt = 0.15; if (e.hp <= 0) { burstParticles(ex, e.y, '#C060E8', 18); enemies.splice(j, 1); } }
   }
-  // 敵弾も消す
   for (const o of shots) if (o.side === 'enemy' && (x - o.x) ** 2 + (y - o.y) ** 2 < R * R) o.dead = true;
 }
-// 必殺技：仲間が敵へ突撃して戻る
+const specialEase = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+// 必殺技：仲間が四方に散らばり、四方向から一斉に斬り込んで戻る
 function triggerSpecial() {
   if (specialCd > 0) return;
   if (state !== STATE.PLAY && state !== STATE.BOSS) return;
   specialCd = SPECIAL_MAX;
   sfx.special();
+  specialFx = 0.5;
+  const t = playerTargetPos(beetle.x, beetle.y);
+  specialTX = t.x; specialTY = t.y;
+  const n = Math.max(1, companions.length);
+  companions.forEach((c, i) => { c.dir = i / n * Math.PI * 2 - Math.PI / 2; c.sx0 = c.x; c.sy0 = c.y; c.strikeHit = false; });
   burstParticles(beetle.x, beetle.y, '#FFF3A0', 20);
-  for (const c of companions) { c.mode = 'dashOut'; }
-  // 仲間がいなくても、必殺の光弾を前方へ放つ
-  if (companions.length === 0) {
-    const t = playerTargetPos(beetle.x, beetle.y);
-    const base = Math.atan2(t.y - beetle.y, t.x - beetle.x);
-    for (let i = 0; i < 8; i++) fireShot(beetle.x + beetle.size, beetle.y, 'player', 5 + level, '#FFF3A0', 3, { angle: base - Math.atan2(0, 1) + (i - 3.5) * 0.12 });
+  if (companions.length > 0) {
+    specialActive = true; specialT = 0;
+  } else {
+    // 仲間なし：四方から光弾を収束させる
+    const R = Math.max(W, H) * 0.4;
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * Math.PI * 2;
+      const sx = specialTX + Math.cos(a) * R, sy = specialTY + Math.sin(a) * R;
+      const ang = Math.atan2(specialTY - sy, specialTX - sx), sp = Math.max(W, H) * 1.1;
+      shots.push({ x: sx, y: sy, r: beetle.size * 0.45, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, side: 'player', dmg: 5 + level, color: '#FFF3A0', spin: 0, pierce: 4, kind: 'normal', fuse: 0, life: 0 });
+    }
   }
 }
+// 必殺技の振り付け（集合→四方から突撃→戻る）
+function updateSpecial(dt) {
+  specialT += dt;
+  const t = playerTargetPos(beetle.x, beetle.y);
+  specialTX = t.x; specialTY = t.y;
+  const R = Math.min(W, H) * 0.34;
+  const n = Math.max(1, companions.length);
+  for (const c of companions) {
+    c.wing += dt * 40;
+    const sidex = specialTX + Math.cos(c.dir) * R, sidey = specialTY + Math.sin(c.dir) * R;
+    if (specialT < 0.35) {                       // 集合：四方の側面へ
+      const k = specialEase(specialT / 0.35);
+      c.x = c.sx0 + (sidex - c.sx0) * k; c.y = c.sy0 + (sidey - c.sy0) * k;
+    } else if (specialT < 0.62) {                // 突撃：一斉に中心へ
+      const k = specialEase((specialT - 0.35) / 0.27);
+      c.x = sidex + (specialTX - sidex) * k; c.y = sidey + (specialTY - sidey) * k;
+      if (!c.strikeHit && k > 0.72) { companionSpecialHit(specialTX, specialTY); c.strikeHit = true; }
+    } else if (specialT < 1.05) {                // 戻る：オービットへ
+      const p = companionOrbitPos(c, n);
+      const k = specialEase((specialT - 0.62) / 0.43);
+      c.x = specialTX + (p.x - specialTX) * k; c.y = specialTY + (p.y - specialTY) * k;
+    }
+    // キラキラの尾
+    if (Math.random() < 0.7) particles.push({ x: c.x, y: c.y, vx: (Math.random() - 0.5) * 50, vy: (Math.random() - 0.5) * 50, life: 0.4, maxLife: 0.4, color: Math.random() < 0.5 ? '#FFF3A0' : '#8AF0FF', r: 2 + Math.random() * 3 });
+  }
+  if (specialT >= 1.05) { specialActive = false; }
+}
 function updateCompanions(dt) {
+  if (specialActive) return;   // 必殺技中は updateSpecial が位置を制御
   const n = companions.length;
   for (const c of companions) {
     c.wing += dt * 30;
-
-    if (c.mode === 'dashOut') {
-      const t = playerTargetPos(c.x, c.y);
-      const dx = t.x - c.x, dy = t.y - c.y, d = Math.hypot(dx, dy) || 1;
-      const sp = Math.max(W, H) * 1.7;
-      c.x += dx / d * sp * dt; c.y += dy / d * sp * dt;
-      if (Math.random() < 0.5) burstParticles(c.x, c.y, '#FFF3A0', 2);
-      if (d < beetle.size * 1.6) { companionSpecialHit(c.x, c.y); c.mode = 'dashBack'; }
-      continue;
-    }
-    if (c.mode === 'dashBack') {
-      const p = companionOrbitPos(c, n);
-      const dx = p.x - c.x, dy = p.y - c.y, d = Math.hypot(dx, dy) || 1;
-      const sp = Math.max(W, H) * 1.5;
-      c.x += dx / d * sp * dt; c.y += dy / d * sp * dt;
-      if (d < beetle.size * 0.6) c.mode = 'orbit';
-      continue;
-    }
-
-    // 通常：クワガタの周りをまわる
     c.t += dt;
     const p = companionOrbitPos(c, n);
     c.x += (p.x - c.x) * Math.min(1, dt * 8);
@@ -1175,6 +1203,7 @@ function updateBoss(dt) {
   if (beetle.atkCd > 0) beetle.atkCd -= dt;
   if (beetle.atkAnim > 0) beetle.atkAnim -= dt;
   if (specialCd > 0) specialCd -= dt;
+  if (specialFx > 0) specialFx -= dt;
   if (shake > 0) shake -= dt * 3;
   if (boss.hurt > 0) boss.hurt -= dt;
   if (bossBanner > 0) bossBanner -= dt;
@@ -1208,6 +1237,7 @@ function updateBoss(dt) {
 
   if (attackHeld() && beetle.atkCd <= 0) doAttack();
 
+  if (specialActive) updateSpecial(dt);
   updateCompanions(dt);
   updateShots(dt);
   updateDecor(dt, 0.12);
@@ -1302,6 +1332,7 @@ function draw() {
     drawCompanions();
     drawBeetle();
   }
+  if (specialActive) drawSpecialWorld();
   drawHUD();
   drawAttackButton();
   drawSpecialButton();
@@ -1314,8 +1345,59 @@ function draw() {
   else if (state === STATE.RETRY) drawRetry();
   else if (state === STATE.LEVELUP) drawLevelUp();
   if (state === STATE.BOSS && bossBanner > 0) drawBossBanner();
+  drawSpecialOverlay();
 
   drawConfettiLayer();
+}
+
+// 必殺技の演出（斬撃線＋衝撃リング）
+function drawSpecialWorld() {
+  const base = Math.min(W, H);
+  // 突撃フェーズ：四方から中心へ収束する斬撃線
+  if (specialT >= 0.35 && specialT < 0.78) {
+    const p = Math.min(1, (specialT - 0.35) / 0.32);
+    ctx.save();
+    ctx.globalAlpha = 0.85 * (1 - p * 0.4);
+    ctx.strokeStyle = '#EAFBFF'; ctx.lineWidth = base * 0.022; ctx.lineCap = 'round';
+    ctx.shadowColor = '#8AF0FF'; ctx.shadowBlur = base * 0.03;
+    for (const c of companions) {
+      const R0 = base * 0.34, R1 = R0 * (1 - p);
+      const x0 = specialTX + Math.cos(c.dir) * R0, y0 = specialTY + Math.sin(c.dir) * R0;
+      const x1 = specialTX + Math.cos(c.dir) * R1 * 0.3, y1 = specialTY + Math.sin(c.dir) * R1 * 0.3;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    }
+    ctx.restore();
+    // 中心の衝撃リング
+    ctx.save();
+    ctx.globalAlpha = 0.75 * (1 - p);
+    ctx.strokeStyle = '#FFF3A0'; ctx.lineWidth = base * 0.03 * (1 - p * 0.5);
+    ctx.beginPath(); ctx.arc(specialTX, specialTY, base * 0.05 + p * base * 0.32, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+}
+// 必殺技の全画面演出（フラッシュ＋バナー）
+function drawSpecialOverlay() {
+  const base = Math.min(W, H);
+  if (specialFx > 0) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, specialFx / 0.5) * 0.55;
+    const fg = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.75);
+    fg.addColorStop(0, 'rgba(255,255,255,0.9)'); fg.addColorStop(1, 'rgba(140,240,255,0)');
+    ctx.fillStyle = fg; ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+  if (specialActive && specialT < 0.95) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (0.95 - specialT) / 0.25, specialT / 0.12);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `bold ${base * 0.14}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
+    ctx.lineJoin = 'round'; ctx.strokeStyle = '#4D7BE8'; ctx.lineWidth = base * 0.018;
+    ctx.strokeText('ひっさつ！', W / 2, H * 0.26);
+    const tg = ctx.createLinearGradient(0, H * 0.21, 0, H * 0.31);
+    tg.addColorStop(0, '#FFF7C0'); tg.addColorStop(1, '#FFC24A');
+    ctx.fillStyle = tg; ctx.fillText('ひっさつ！', W / 2, H * 0.26);
+    ctx.restore();
+  }
 }
 
 // ---------- カード共通描画 ----------

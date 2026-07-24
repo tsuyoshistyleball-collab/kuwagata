@@ -358,11 +358,12 @@ let companions = [];     // 仲間の虫
 let enemies = [];        // 道中の敵キャラ
 let shots = [];          // 弾 {x,y,vx,vy,r,side,dmg,color,spin,pierce}
 let bossBanner = 0;      // 「ボスとうじょう！」表示
+let nextBossT = 0;       // 次のボス（宇宙人）が出るまでの待ち時間
 const boss = {
-  active: false, defeated: false,
+  active: false, defeated: false, type: 'robot',   // 'robot' | 'alien'
   x: 0, y: 0, size: 0,
   hp: 0, maxHp: 0,
-  introT: 0, fireCd: 0, bob: 0, hurt: 0
+  introT: 0, fireCd: 0, bob: 0, hurt: 0, ring: 0
 };
 
 function courseSetup() {
@@ -442,7 +443,9 @@ function resetGame() {
   levelChoices = [];
   boss.active = false;
   boss.defeated = false;
+  boss.type = 'robot';
   bossBanner = 0;
+  nextBossT = 0;
   shake = 0;
   courseSetup();
 }
@@ -763,9 +766,9 @@ function update(dt) {
     }
   }
 
-  // ゴールに到達 → ボスステージへ
+  // ゴールに到達 → ボスステージへ（まずはロボット）
   if (scrollX >= goalDist) {
-    startBoss();
+    startBoss('robot');
   }
 
   updateParticles(dt);
@@ -848,21 +851,25 @@ function updateCompanions(dt) {
 }
 
 // ---------- ボスステージ ----------
-function startBoss() {
+function startBoss(type) {
   state = STATE.BOSS;
   stateTimer = 0;
   bossBanner = 2.2;
+  nextBossT = 0;
+  boss.type = type || 'robot';
   boss.active = true;
   boss.defeated = false;
-  boss.size = Math.min(W, H) * 0.17;
-  boss.maxHp = 260;
-  boss.hp = 260;
+  boss.size = Math.min(W, H) * (boss.type === 'alien' ? 0.185 : 0.17);
+  // 宇宙人は少し体力が多い（2体目）
+  boss.maxHp = boss.type === 'alien' ? 340 : 260;
+  boss.hp = boss.maxHp;
   boss.x = W + boss.size;
   boss.y = H * 0.42;
   boss.introT = 1.6;
-  boss.fireCd = 2.2;
-  boss.bob = 0;
+  boss.fireCd = 2.0;
+  boss.bob = boss.type === 'alien' ? 1.0 : 0;
   boss.hurt = 0;
+  boss.ring = 0;
   shots = [];
   enemies = [];
   beetle.x = W * 0.16;
@@ -873,23 +880,48 @@ function startBoss() {
 function bossDefeated() {
   boss.defeated = true;
   boss.hp = 0;
-  state = STATE.GOAL;
-  stateTimer = 0;
-  Music.stop();
-  sfx.goal();
-  for (let i = 0; i < 120; i++) spawnConfetti();
+  shake = Math.max(shake, 1);
   burstParticles(boss.x, boss.y, '#FFE873', 40);
   burstParticles(boss.x, boss.y, '#FF9A5B', 30);
+  if (boss.type === 'robot') {
+    // つぎのボス（宇宙人）が少し後に登場
+    nextBossT = 1.6;
+    sfx.smash();
+  } else {
+    // 宇宙人も倒したらクリア
+    state = STATE.GOAL;
+    stateTimer = 0;
+    Music.stop();
+    sfx.goal();
+    for (let i = 0; i < 120; i++) spawnConfetti();
+  }
 }
 function bossFire() {
   const bx = boss.x - boss.size * 0.55, by = boss.y;
   const ang = Math.atan2(beetle.y - by, beetle.x - bx);
-  const sp = Math.max(W, H) * 0.42;
-  for (const off of [-0.2, 0, 0.2]) {
-    const a = ang + off;
-    shots.push({ x: bx, y: by, r: boss.size * 0.13, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, side: 'enemy', dmg: 1, color: '#FF5B6E', spin: 0, pierce: 1 });
+  const sp = Math.max(W, H) * (boss.type === 'alien' ? 0.5 : 0.42);
+  if (boss.type === 'alien') {
+    // 宇宙人：5方向のねらい撃ち＋ときどき全方位リング弾（派手）
+    for (const off of [-0.36, -0.18, 0, 0.18, 0.36]) {
+      const a = ang + off;
+      shots.push({ x: bx, y: by, r: boss.size * 0.12, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, side: 'enemy', dmg: 1, color: '#7CFF6A', spin: 0, pierce: 1 });
+    }
+    boss.ring++;
+    if (boss.ring % 3 === 0) {
+      for (let i = 0; i < 14; i++) {
+        const a = i / 14 * Math.PI * 2;
+        shots.push({ x: bx, y: by, r: boss.size * 0.1, vx: Math.cos(a) * sp * 0.68, vy: Math.sin(a) * sp * 0.68, side: 'enemy', dmg: 1, color: '#FF6AF0', spin: 0, pierce: 1 });
+      }
+    }
+    beep(520, 0.08, 'sawtooth', 0.1); beep(300, 0.12, 'square', 0.08, 0.03);
+  } else {
+    // ロボット：3方向のねらい撃ち
+    for (const off of [-0.2, 0, 0.2]) {
+      const a = ang + off;
+      shots.push({ x: bx, y: by, r: boss.size * 0.13, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, side: 'enemy', dmg: 1, color: '#FF5B6E', spin: 0, pierce: 1 });
+    }
+    sfx.attack();
   }
-  sfx.attack();
 }
 
 // プレイヤーがダメージを受ける（敵の攻撃・敵との接触）
@@ -1027,18 +1059,30 @@ function updateBoss(dt) {
   if (boss.hurt > 0) boss.hurt -= dt;
   if (bossBanner > 0) bossBanner -= dt;
 
+  // ロボット撃破後、少し待って宇宙人ボスを登場させる
+  if (nextBossT > 0) {
+    nextBossT -= dt;
+    if (Math.random() < 0.4) burstParticles(boss.x + (Math.random() - 0.5) * boss.size, boss.y + (Math.random() - 0.5) * boss.size, '#FF9A5B', 3);
+    if (nextBossT <= 0) startBoss('alien');
+  }
+
   if (boss.introT > 0) {
     boss.introT -= dt;
     boss.x += (W * 0.8 - boss.x) * Math.min(1, dt * 3);
   } else if (!boss.defeated) {
     boss.bob += dt;
-    boss.y = H * 0.42 + Math.sin(boss.bob * 1.2) * H * 0.14;
-    boss.x = W * 0.8 + Math.sin(boss.bob * 0.6) * W * 0.02;
+    // 宇宙人は上下に大きく・すばやく動く
+    const amp = boss.type === 'alien' ? 0.2 : 0.14;
+    const spd = boss.type === 'alien' ? 1.7 : 1.2;
+    boss.y = H * 0.42 + Math.sin(boss.bob * spd) * H * amp;
+    boss.x = W * 0.8 + Math.sin(boss.bob * 0.6) * W * (boss.type === 'alien' ? 0.05 : 0.02);
     boss.fireCd -= dt;
     if (boss.fireCd <= 0) {
       bossFire();
-      // HPが減るほど攻撃が激しくなる
-      boss.fireCd = 1.5 - (1 - boss.hp / boss.maxHp) * 0.7;
+      // HPが減るほど攻撃が激しくなる。宇宙人はもとから速い
+      boss.fireCd = boss.type === 'alien'
+        ? 1.05 - (1 - boss.hp / boss.maxHp) * 0.6
+        : 1.5 - (1 - boss.hp / boss.maxHp) * 0.7;
     }
   }
 
@@ -1995,14 +2039,92 @@ function drawBossBanner() {
   ctx.font = `bold ${base * 0.11}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.strokeStyle = '#fff'; ctx.lineWidth = base * 0.014; ctx.lineJoin = 'round';
-  ctx.strokeText('ボス とうじょう！', W / 2, H * 0.42);
-  ctx.fillText('ボス とうじょう！', W / 2, H * 0.42);
+  const txt = boss.type === 'alien' ? 'うちゅうじん とうじょう！' : 'ボス とうじょう！';
+  ctx.strokeText(txt, W / 2, H * 0.42);
+  ctx.fillText(txt, W / 2, H * 0.42);
+  ctx.restore();
+}
+
+// ---------- ボスの描画（タイプで振り分け） ----------
+function drawBoss() {
+  if (!boss.active) return;
+  if (boss.type === 'alien') drawAlienBoss();
+  else drawRobotBoss();
+}
+
+// ---------- 宇宙人ボス（UFO） ----------
+function drawAlienBoss() {
+  const S = boss.size;
+  ctx.save();
+  ctx.translate(boss.x, boss.y);
+  const flash = boss.hurt > 0;
+
+  // オーラ
+  const aura = ctx.createRadialGradient(0, 0, S * 0.4, 0, 0, S * 1.7);
+  aura.addColorStop(0, 'rgba(120,255,140,0.3)');
+  aura.addColorStop(1, 'rgba(120,255,140,0)');
+  ctx.fillStyle = aura;
+  ctx.beginPath(); ctx.arc(0, 0, S * 1.7, 0, Math.PI * 2); ctx.fill();
+
+  // トラクタービーム（下向きの光）
+  ctx.fillStyle = 'rgba(150,255,170,0.14)';
+  ctx.beginPath();
+  ctx.moveTo(-S * 0.35, S * 0.2); ctx.lineTo(-S * 0.85, S * 1.5); ctx.lineTo(S * 0.85, S * 1.5); ctx.lineTo(S * 0.35, S * 0.2);
+  ctx.closePath(); ctx.fill();
+
+  // 円盤本体
+  const g = ctx.createLinearGradient(0, -S * 0.25, 0, S * 0.35);
+  g.addColorStop(0, flash ? '#FFFFFF' : '#C2CCD8');
+  g.addColorStop(1, flash ? '#FFFFFF' : '#57616F');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(0, S * 0.12, S * 1.25, S * 0.44, 0, 0, Math.PI * 2); ctx.fill();
+  // 円盤の下の影
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.beginPath(); ctx.ellipse(0, S * 0.28, S * 1.0, S * 0.18, 0, 0, Math.PI * 2); ctx.fill();
+
+  // ふちの点滅ライト
+  for (let i = 0; i < 7; i++) {
+    const a = i / 7 * Math.PI * 2;
+    ctx.fillStyle = (Math.floor(stateTimer * 6) + i) % 2 ? '#FFE24A' : '#FF6AF0';
+    ctx.beginPath(); ctx.arc(Math.cos(a) * S * 1.08, S * 0.12 + Math.sin(a) * S * 0.38, S * 0.09, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // ドーム（ガラス）
+  const dg = ctx.createRadialGradient(-S * 0.2, -S * 0.45, S * 0.1, 0, -S * 0.15, S * 0.75);
+  dg.addColorStop(0, 'rgba(210,255,225,0.95)');
+  dg.addColorStop(1, 'rgba(120,200,150,0.4)');
+  ctx.fillStyle = dg;
+  ctx.beginPath(); ctx.ellipse(0, -S * 0.08, S * 0.62, S * 0.6, 0, Math.PI, 0); ctx.fill();
+
+  // 宇宙人の顔
+  ctx.fillStyle = flash ? '#E6FFE6' : '#7BD86A';
+  ctx.beginPath(); ctx.ellipse(0, -S * 0.18, S * 0.32, S * 0.42, 0, 0, Math.PI * 2); ctx.fill();
+  // 大きな黒い目
+  ctx.fillStyle = '#111';
+  ctx.beginPath(); ctx.ellipse(-S * 0.14, -S * 0.16, S * 0.1, S * 0.17, 0.35, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(S * 0.14, -S * 0.16, S * 0.1, S * 0.17, -0.35, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#FFF';
+  ctx.beginPath(); ctx.arc(-S * 0.16, -S * 0.22, S * 0.03, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(S * 0.12, -S * 0.22, S * 0.03, 0, Math.PI * 2); ctx.fill();
+  // 口
+  ctx.strokeStyle = '#3A6A2E'; ctx.lineWidth = S * 0.03;
+  ctx.beginPath(); ctx.arc(0, -S * 0.02, S * 0.08, 0.1 * Math.PI, 0.9 * Math.PI); ctx.stroke();
+  // アンテナ
+  ctx.strokeStyle = flash ? '#FFF' : '#5CB03E'; ctx.lineWidth = S * 0.05;
+  ctx.beginPath(); ctx.moveTo(0, -S * 0.58); ctx.lineTo(0, -S * 0.88); ctx.stroke();
+  ctx.fillStyle = '#FF6AF0';
+  const ap = 1 + Math.sin(stateTimer * 8) * 0.2;
+  ctx.beginPath(); ctx.arc(0, -S * 0.9, S * 0.09 * ap, 0, Math.PI * 2); ctx.fill();
+
+  if (flash) {
+    ctx.globalAlpha = 0.5; ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(0, 0, S * 1.05, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+  }
   ctx.restore();
 }
 
 // ---------- ボスのロボット ----------
-function drawBoss() {
-  if (!boss.active) return;
+function drawRobotBoss() {
   const S = boss.size;
   ctx.save();
   ctx.translate(boss.x, boss.y);
@@ -2157,7 +2279,7 @@ function drawHUD() {
     ctx.fillStyle = '#fff';
     ctx.font = `bold ${bh * 1.1}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('ボス', W / 2, by - bh * 0.9);
+    ctx.fillText(boss.type === 'alien' ? 'うちゅうじん' : 'ボス', W / 2, by - bh * 0.9);
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     roundRect(bx, by, bw, bh, bh / 2); ctx.fill();
     const hpFrac = Math.max(0, boss.hp / boss.maxHp);
@@ -2329,7 +2451,9 @@ if (typeof location !== 'undefined' && location.search.indexOf('debug') >= 0) {
     forceLevelUp() { exp = expToNext; triggerLevelUp(); },
     pickChoice(i) { if (levelChoices[i]) applyUpgrade(levelChoices[i]); },
     addFriend() { addCompanion(); },
-    gotoBoss() { startStage(0); startBoss(); },
+    gotoBoss(type) { startStage(0); startBoss(type || 'robot'); },
+    get bossType() { return boss.type; },
+    get bossHp() { return boss.hp; },
     hurtBoss(n) { boss.hp -= (n || 1); if (boss.hp <= 0) bossDefeated(); },
     toggleMusic() { return Music.toggle(); },
     addObstacleAhead() {

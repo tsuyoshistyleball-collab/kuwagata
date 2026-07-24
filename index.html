@@ -372,6 +372,7 @@ let specialActive = false;  // 必殺技の演出中
 let specialT = 0;           // 演出の経過時間
 let specialTX = 0, specialTY = 0;   // ねらう地点
 let specialFx = 0;          // 発動フラッシュ
+let specialStruck = false;  // 着弾の大閃光を出したか
 const boss = {
   active: false, defeated: false, type: 'robot',   // 'robot' | 'alien'
   x: 0, y: 0, size: 0,
@@ -463,6 +464,7 @@ function resetGame() {
   specialActive = false;
   specialT = 0;
   specialFx = 0;
+  specialStruck = false;
   shake = 0;
   courseSetup();
 }
@@ -910,7 +912,7 @@ function triggerSpecial() {
   companions.forEach((c, i) => { c.dir = i / n * Math.PI * 2 - Math.PI / 2; c.sx0 = c.x; c.sy0 = c.y; c.strikeHit = false; });
   burstParticles(beetle.x, beetle.y, '#FFF3A0', 20);
   if (companions.length > 0) {
-    specialActive = true; specialT = 0;
+    specialActive = true; specialT = 0; specialStruck = false;
   } else {
     // 仲間なし：四方から光弾を収束させる
     const R = Math.max(W, H) * 0.4;
@@ -927,6 +929,14 @@ function updateSpecial(dt) {
   specialT += dt;
   const t = playerTargetPos(beetle.x, beetle.y);
   specialTX = t.x; specialTY = t.y;
+  // 着弾の瞬間に大閃光＆強い揺れ
+  if (!specialStruck && specialT >= 0.5) {
+    specialStruck = true;
+    specialFx = 0.75;
+    shake = Math.max(shake, 1.4);
+    burstParticles(specialTX, specialTY, '#FFFFFF', 24);
+    burstParticles(specialTX, specialTY, '#FFF3A0', 20);
+  }
   const R = Math.min(W, H) * 0.34;
   const n = Math.max(1, companions.length);
   for (const c of companions) {
@@ -1378,52 +1388,131 @@ function draw() {
   drawConfettiLayer();
 }
 
-// 必殺技の演出（斬撃線＋衝撃リング）
+// 必殺技の演出（集中線・虹色の斬撃・多重リング・放射光線・大閃光）
 function drawSpecialWorld() {
   const base = Math.min(W, H);
-  // 突撃フェーズ：四方から中心へ収束する斬撃線
-  if (specialT >= 0.35 && specialT < 0.78) {
-    const p = Math.min(1, (specialT - 0.35) / 0.32);
+  const tx = specialTX, ty = specialTY;
+
+  // 集中線（マンガ風にターゲットへ収束）
+  if (specialT > 0.12 && specialT < 0.72) {
+    const p = (specialT - 0.12) / 0.6;
     ctx.save();
-    ctx.globalAlpha = 0.85 * (1 - p * 0.4);
-    ctx.strokeStyle = '#EAFBFF'; ctx.lineWidth = base * 0.022; ctx.lineCap = 'round';
-    ctx.shadowColor = '#8AF0FF'; ctx.shadowBlur = base * 0.03;
-    for (const c of companions) {
-      const R0 = base * 0.34, R1 = R0 * (1 - p);
-      const x0 = specialTX + Math.cos(c.dir) * R0, y0 = specialTY + Math.sin(c.dir) * R0;
-      const x1 = specialTX + Math.cos(c.dir) * R1 * 0.3, y1 = specialTY + Math.sin(c.dir) * R1 * 0.3;
-      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    ctx.globalAlpha = 0.4 * Math.sin(Math.min(1, p) * Math.PI);
+    ctx.strokeStyle = '#FFFFFF';
+    const N = 22, big = Math.max(W, H) * 1.2, inner = base * (0.55 - p * 0.28);
+    for (let i = 0; i < N; i++) {
+      const a = i / N * Math.PI * 2 + specialT * 1.2;
+      ctx.lineWidth = base * 0.008 * (0.6 + (i % 3));
+      ctx.beginPath();
+      ctx.moveTo(tx + Math.cos(a) * big, ty + Math.sin(a) * big);
+      ctx.lineTo(tx + Math.cos(a) * inner, ty + Math.sin(a) * inner);
+      ctx.stroke();
     }
     ctx.restore();
-    // 中心の衝撃リング
+  }
+
+  // 8方向の斬撃線（虹色に光って収束）
+  if (specialT >= 0.32 && specialT < 0.82) {
+    const p = Math.min(1, (specialT - 0.32) / 0.34);
+    const cols = ['#EAFBFF', '#FFF3A0', '#8AF0FF', '#FFB0FF', '#B0FFC0', '#FFD0A0'];
     ctx.save();
-    ctx.globalAlpha = 0.75 * (1 - p);
-    ctx.strokeStyle = '#FFF3A0'; ctx.lineWidth = base * 0.03 * (1 - p * 0.5);
-    ctx.beginPath(); ctx.arc(specialTX, specialTY, base * 0.05 + p * base * 0.32, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 0.95 * (1 - p * 0.3);
+    ctx.lineCap = 'round'; ctx.shadowBlur = base * 0.045;
+    for (let i = 0; i < 8; i++) {
+      const dir = i / 8 * Math.PI * 2;
+      const R0 = base * 0.46, R1 = R0 * (1 - p);
+      ctx.strokeStyle = cols[i % cols.length]; ctx.shadowColor = cols[i % cols.length];
+      ctx.lineWidth = base * 0.026;
+      ctx.beginPath();
+      ctx.moveTo(tx + Math.cos(dir) * R0, ty + Math.sin(dir) * R0);
+      ctx.lineTo(tx + Math.cos(dir) * R1 * 0.22, ty + Math.sin(dir) * R1 * 0.22);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 着弾後：多重の同心衝撃リング
+  for (let k = 0; k < 3; k++) {
+    const rt = specialT - (0.5 + k * 0.09);
+    if (rt > 0 && rt < 0.5) {
+      const rr = rt * base * 1.7, al = 1 - rt / 0.5;
+      ctx.save();
+      ctx.globalAlpha = 0.75 * al;
+      ctx.strokeStyle = k === 0 ? '#FFFFFF' : (k === 1 ? '#FFF3A0' : '#8AF0FF');
+      ctx.lineWidth = base * 0.032 * al;
+      ctx.beginPath(); ctx.arc(tx, ty, base * 0.06 + rr, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // 着弾：放射状の光線
+  if (specialT > 0.5 && specialT < 0.78) {
+    const p = (specialT - 0.5) / 0.28;
+    ctx.save();
+    ctx.globalAlpha = 0.85 * (1 - p);
+    ctx.strokeStyle = '#FFF7C0'; ctx.lineWidth = base * 0.02; ctx.lineCap = 'round';
+    for (let i = 0; i < 14; i++) {
+      const a = i / 14 * Math.PI * 2 + 0.3;
+      const r0 = base * 0.05, r1 = base * (0.16 + p * 0.45);
+      ctx.beginPath(); ctx.moveTo(tx + Math.cos(a) * r0, ty + Math.sin(a) * r0); ctx.lineTo(tx + Math.cos(a) * r1, ty + Math.sin(a) * r1); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 中心の大閃光
+  if (specialT > 0.5 && specialT < 0.72) {
+    const p = (specialT - 0.5) / 0.22;
+    ctx.save();
+    ctx.globalAlpha = 1 - p;
+    const g = ctx.createRadialGradient(tx, ty, 0, tx, ty, base * 0.4);
+    g.addColorStop(0, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0.5, 'rgba(255,240,150,0.6)');
+    g.addColorStop(1, 'rgba(255,200,80,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(tx, ty, base * 0.4, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
 }
-// 必殺技の全画面演出（フラッシュ＋バナー）
+// 必殺技の全画面演出（ビネット＋フラッシュ＋スケールするバナー）
 function drawSpecialOverlay() {
   const base = Math.min(W, H);
+  // ビネット（画面のふちを少し暗くして必殺技を引き立てる）
+  if (specialActive) {
+    const p = Math.sin(Math.min(1, specialT / 1.05) * Math.PI);
+    ctx.save();
+    ctx.globalAlpha = 0.4 * p;
+    const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.2, W / 2, H / 2, Math.max(W, H) * 0.72);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(20,10,40,0.9)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+  // フラッシュ
   if (specialFx > 0) {
     ctx.save();
-    ctx.globalAlpha = Math.min(1, specialFx / 0.5) * 0.55;
-    const fg = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.75);
-    fg.addColorStop(0, 'rgba(255,255,255,0.9)'); fg.addColorStop(1, 'rgba(140,240,255,0)');
+    ctx.globalAlpha = Math.min(1, specialFx / 0.5) * 0.7;
+    const fg = ctx.createRadialGradient(specialTX, specialTY, 0, specialTX, specialTY, Math.max(W, H) * 0.8);
+    fg.addColorStop(0, 'rgba(255,255,255,0.95)'); fg.addColorStop(0.5, 'rgba(220,245,255,0.5)'); fg.addColorStop(1, 'rgba(140,240,255,0)');
     ctx.fillStyle = fg; ctx.fillRect(0, 0, W, H);
     ctx.restore();
   }
-  if (specialActive && specialT < 0.95) {
+  // バナー（出だしに大きく→通常サイズ）
+  if (specialActive && specialT < 1.0) {
+    const a = Math.min(1, (1.0 - specialT) / 0.25, specialT / 0.1);
+    const sc = 1 + Math.max(0, 0.28 - specialT) * 1.8;
     ctx.save();
-    ctx.globalAlpha = Math.min(1, (0.95 - specialT) / 0.25, specialT / 0.12);
+    ctx.globalAlpha = a;
+    ctx.translate(W / 2, H * 0.26); ctx.scale(sc, sc);
+    // 帯
+    ctx.globalAlpha = a * 0.35; ctx.fillStyle = '#5A2AA0';
+    ctx.fillRect(-W, -base * 0.11, 2 * W, base * 0.22);
+    ctx.globalAlpha = a;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = `bold ${base * 0.14}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
-    ctx.lineJoin = 'round'; ctx.strokeStyle = '#4D7BE8'; ctx.lineWidth = base * 0.018;
-    ctx.strokeText('ひっさつ！', W / 2, H * 0.26);
-    const tg = ctx.createLinearGradient(0, H * 0.21, 0, H * 0.31);
-    tg.addColorStop(0, '#FFF7C0'); tg.addColorStop(1, '#FFC24A');
-    ctx.fillStyle = tg; ctx.fillText('ひっさつ！', W / 2, H * 0.26);
+    ctx.font = `bold ${base * 0.15}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
+    ctx.lineJoin = 'round'; ctx.strokeStyle = '#4D2A8A'; ctx.lineWidth = base * 0.022;
+    ctx.strokeText('ひっさつ！', 0, 0);
+    const tg = ctx.createLinearGradient(0, -base * 0.08, 0, base * 0.08);
+    tg.addColorStop(0, '#FFFBE0'); tg.addColorStop(0.5, '#FFE24A'); tg.addColorStop(1, '#FF9A2B');
+    ctx.fillStyle = tg; ctx.fillText('ひっさつ！', 0, 0);
     ctx.restore();
   }
 }

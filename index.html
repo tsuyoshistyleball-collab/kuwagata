@@ -417,7 +417,7 @@ function courseSetup() {
   }
   trees = [];
   for (let i = 0; i < 14; i++) {
-    trees.push({ x: Math.random() * W * 3, s: 0.6 + Math.random() * 0.7 });
+    trees.push({ x: Math.random() * W * 3, s: 0.6 + Math.random() * 0.7, nextErupt: 1 + Math.random() * 6, erupting: 0 });
   }
   // 建物（家・灯台・小屋・ロケット）を点々と配置
   houses = [];
@@ -487,10 +487,12 @@ function inMusicButton(x, y) {
   const dx = x - b.x, dy = y - b.y;
   return dx * dx + dy * dy <= (b.r * 1.35) * (b.r * 1.35);
 }
-// ---------- 必殺技ボタン（左下） ----------
+// ---------- 必殺技ボタン（攻撃ボタンの左・やや小さめ） ----------
 function specialButton() {
-  const r = Math.min(W, H) * 0.09;
-  return { x: r + Math.min(W, H) * 0.04, y: H - r - Math.min(W, H) * 0.05, r };
+  const ab = attackButton();
+  const r = Math.min(W, H) * 0.075;
+  const gap = Math.min(W, H) * 0.03;
+  return { x: ab.x - ab.r - gap - r, y: ab.y, r };
 }
 function inSpecialButton(x, y) {
   const b = specialButton();
@@ -755,6 +757,7 @@ function update(dt) {
   // スクロール
   scrollX += speed * dt;
   updateDecor(dt, 1);
+  if (STAGES[stageIndex].id === 'volcano') updateVolcano(dt);
 
   if (beetle.invincible > 0) beetle.invincible -= dt;
   if (beetle.atkCd > 0) beetle.atkCd -= dt;
@@ -1269,6 +1272,31 @@ function updateDecor(dt, mul) {
   }
 }
 
+// 火山ステージ：背景の火山がときどき噴火する
+function eruptVolcano(t) {
+  const s = t.s * Math.min(W, H) * 0.09;
+  const cx = t.x, cy = H * 0.88 - s * 2.0;
+  for (let i = 0; i < 16; i++) {
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.0;
+    const sp = 130 + Math.random() * 240;
+    particles.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.9 + Math.random() * 0.6, maxLife: 1.5, color: Math.random() < 0.5 ? '#FF6B2B' : '#FFB03B', r: 3 + Math.random() * 4 });
+  }
+  for (let i = 0; i < 4; i++) {
+    particles.push({ x: cx + (Math.random() - 0.5) * s * 0.5, y: cy, vx: (Math.random() - 0.5) * 30, vy: -40 - Math.random() * 50, life: 1.2, maxLife: 1.2, color: 'rgba(120,90,90,0.5)', r: s * 0.3 });
+  }
+  t.erupting = 0.6;
+}
+function updateVolcano(dt) {
+  for (const t of trees) {
+    if (t.erupting > 0) t.erupting -= dt;
+    t.nextErupt -= dt;
+    if (t.nextErupt <= 0) {
+      if (t.x > -W * 0.2 && t.x < W + W * 0.2) eruptVolcano(t);
+      t.nextErupt = 3.5 + Math.random() * 5;
+    }
+  }
+}
+
 function burstParticles(x, y, color, n) {
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2;
@@ -1522,16 +1550,18 @@ function drawBackground() {
     for (const t of trees) {
       const s = t.s * Math.min(W, H) * 0.09;
       if (stg.decor === 'island') drawIsland(t.x, groundY, s);
-      else if (stg.decor === 'volcano') drawVolcanoCone(t.x, groundY, s);
+      else if (stg.decor === 'volcano') drawVolcanoCone(t.x, groundY, s, t.erupting || 0);
       else if (stg.decor === 'space') drawSpacePlanet(t.x, groundY, s, t.s);
       else drawTreeCone(t.x, groundY, s, t.s);
     }
-    for (const hs of houses) {
-      const s = hs.s * Math.min(W, H) * 0.11;
-      if (stg.id === 'sea') drawLighthouse(hs.x, groundY, s, hs.kind);
-      else if (stg.id === 'volcano') drawHut(hs.x, groundY, s, hs.kind);
-      else if (stg.id === 'space') drawRocket(hs.x, groundY, s, hs.kind);
-      else drawHouse(hs.x, groundY, s, hs.kind);
+    // 建物（火山ステージは家を出さない）
+    if (stg.id !== 'volcano') {
+      for (const hs of houses) {
+        const s = hs.s * Math.min(W, H) * 0.11;
+        if (stg.id === 'sea') drawLighthouse(hs.x, groundY, s, hs.kind);
+        else if (stg.id === 'space') drawRocket(hs.x, groundY, s, hs.kind);
+        else drawHouse(hs.x, groundY, s, hs.kind);
+      }
     }
   }
 
@@ -1604,13 +1634,27 @@ function drawIsland(x, gy, s) {
     ctx.fill();
   }
 }
-function drawVolcanoCone(x, gy, s) {
+function drawVolcanoCone(x, gy, s, erupting) {
   ctx.fillStyle = '#4A3330';
   ctx.beginPath();
   ctx.moveTo(x - s * 1.4, gy); ctx.lineTo(x - s * 0.4, gy - s * 2.0); ctx.lineTo(x + s * 0.4, gy - s * 2.0); ctx.lineTo(x + s * 1.4, gy); ctx.closePath(); ctx.fill();
+  const cy = gy - s * 2.0;
+  // 噴火中は火口が明るく光る
+  if (erupting > 0) {
+    const gl = ctx.createRadialGradient(x, cy, s * 0.1, x, cy, s * 1.3);
+    gl.addColorStop(0, 'rgba(255,220,120,0.9)'); gl.addColorStop(1, 'rgba(255,120,40,0)');
+    ctx.fillStyle = gl;
+    ctx.beginPath(); ctx.arc(x, cy, s * 1.3, 0, Math.PI * 2); ctx.fill();
+    // 火口から溢れる溶岩
+    ctx.strokeStyle = '#FF6B2B'; ctx.lineWidth = s * 0.16; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x - s * 0.3, cy); ctx.quadraticCurveTo(x - s * 0.7, gy - s * 1.2, x - s * 0.5, gy);
+    ctx.moveTo(x + s * 0.3, cy); ctx.quadraticCurveTo(x + s * 0.7, gy - s * 1.2, x + s * 0.5, gy);
+    ctx.stroke();
+  }
   // 火口の光
-  ctx.fillStyle = '#FF7A2B';
-  ctx.beginPath(); ctx.ellipse(x, gy - s * 2.0, s * 0.42, s * 0.14, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = erupting > 0 ? '#FFC24A' : '#FF7A2B';
+  ctx.beginPath(); ctx.ellipse(x, cy, s * 0.42, s * 0.14, 0, 0, Math.PI * 2); ctx.fill();
   // 煙
   ctx.fillStyle = 'rgba(120,90,90,0.4)';
   ctx.beginPath(); ctx.arc(x, gy - s * 2.4, s * 0.35, 0, Math.PI * 2); ctx.arc(x + s * 0.2, gy - s * 2.8, s * 0.28, 0, Math.PI * 2); ctx.fill();
@@ -2734,6 +2778,7 @@ if (typeof location !== 'undefined' && location.search.indexOf('debug') >= 0) {
     setJellies(n) { jellies = n; },
     setWeapon(w) { beetle.weapons[w] = (beetle.weapons[w] || 0) + 1; },
     special() { triggerSpecial(); },
+    erupt() { for (const t of trees) if (t.x > -W * 0.2 && t.x < W + W * 0.2) eruptVolcano(t); },
     get specialCd() { return specialCd; },
     get companionModes() { return companions.map(c => c.mode); },
     getWeapons() { return Object.assign({}, beetle.weapons); },

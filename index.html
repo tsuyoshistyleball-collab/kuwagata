@@ -432,7 +432,9 @@ function courseSetup() {
       const ix = x + spacing * 0.5;
       const safeTop = H * 0.2, safeBottom = H * 0.75;
       const iy = safeTop + Math.random() * (safeBottom - safeTop);
-      const kind = (i === 3 || i === 8 || i === 13) ? 'friend' : 'jelly';
+      let kind = 'jelly';
+      if (i === 3 || i === 8 || i === 13) kind = 'friend';
+      else if (i === 5 || i === 11 || i === 15) kind = 'heart';   // ときどき回復のハート
       items.push({ x: ix, y: iy, taken: false, bob: Math.random() * Math.PI * 2, kind });
     }
   }
@@ -534,6 +536,31 @@ function inSpecialButton(x, y) {
   const dx = x - b.x, dy = y - b.y;
   return dx * dx + dy * dy <= (b.r * 1.2) * (b.r * 1.2);
 }
+// ---------- もどるボタン（選択画面の左上） ----------
+function backButton() {
+  const base = Math.min(W, H);
+  const r = base * 0.06;
+  return { x: base * 0.035 + r, y: base * 0.035 + r, r };
+}
+function inBackButton(x, y) {
+  const b = backButton();
+  const dx = x - b.x, dy = y - b.y;
+  return dx * dx + dy * dy <= (b.r * 1.4) * (b.r * 1.4);
+}
+function drawBackButton() {
+  const b = backButton();
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#E8A33B'; ctx.lineWidth = b.r * 0.16;
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.stroke();
+  // 左向き矢印
+  ctx.fillStyle = '#5C3317';
+  ctx.beginPath();
+  ctx.moveTo(b.x - b.r * 0.32, b.y);
+  ctx.lineTo(b.x + b.r * 0.22, b.y - b.r * 0.42);
+  ctx.lineTo(b.x + b.r * 0.22, b.y + b.r * 0.42);
+  ctx.closePath(); ctx.fill();
+}
 
 // 障害物を壊す（配列インデックス指定）
 function smashObstacleIndex(i) {
@@ -570,7 +597,7 @@ function fireShot(x, y, side, dmg, color, pierce, opts) {
     let sp = base;
     if (kind === 'laser') sp = base * 1.9;
     else if (kind === 'bomb') sp = base * 0.55;
-    else if (kind === 'flame') sp = base * 0.55;       // 炎は短射程
+    else if (kind === 'flame') sp = base * 0.95;       // 炎：しっかり届く射程
     else if (kind === 'sword') sp = base * 0.72;       // 剣はゆっくり大きく
     else if (kind === 'gun') sp = base * 1.5;          // 銃は速い
     vx = Math.cos(ang) * sp; vy = Math.sin(ang) * sp;
@@ -584,7 +611,7 @@ function fireShot(x, y, side, dmg, color, pierce, opts) {
     color: color || (side === 'player' ? '#FFE873' : '#FF5B6E'),
     spin: 0, pierce: pierce || 1, kind,
     fuse: kind === 'bomb' ? 0.85 : 0,
-    life: kind === 'flame' ? 0.34 : 0,                 // 炎は短時間で消える＝短射程
+    life: kind === 'flame' ? 0.62 : 0,                 // 炎：敵まで届く長さ
     grow: kind === 'flame' ? 1 + Math.random() * 0.5 : 1,
     hover: kind === 'sword' ? 0.4 : 0,                 // 剣が空中で溜める時間
     bobY: 0, flick: Math.random() * 6
@@ -716,6 +743,7 @@ function pointerDown(id, x, y) {
   }
   // ステージ選択：カードをタップ
   if (state === STATE.STAGESELECT) {
+    if (inBackButton(x, y)) { state = STATE.CHARSELECT; stateTimer = 0; sfx.start(); return; }
     if (stateTimer > 0.4) { const i = stageCardAt(x, y); if (i >= 0) startStage(i); }
     return;
   }
@@ -848,6 +876,12 @@ function update(dt) {
         sfx.powerup();
         burstParticles(sx, iy, '#8BD1FF', 18);
         burstParticles(beetle.x, beetle.y, '#FFFFFF', 12);
+      } else if (it.kind === 'heart') {
+        if (hearts < MAX_HEARTS) hearts++;      // ハートで体力かいふく
+        beetle.invincible = Math.max(beetle.invincible, 0.3);
+        sfx.powerup();
+        burstParticles(sx, iy, '#FF8DA3', 20);
+        burstParticles(beetle.x, beetle.y, '#FFD0DC', 12);
       } else {
         jellies++;
         exp++;                                   // ゼリーで経験値がたまる
@@ -1651,6 +1685,7 @@ function drawStageSelect() {
     ctx.fillText(st.name, r.x + r.w / 2, r.y + r.h * (landscape ? 0.8 : 0.78));
   }
   if (stateTimer > 0.4) bigText('タップで スタート！', H * 0.93, base * 0.045, '#FFF', '#E8743B');
+  drawBackButton();   // キャラ選択へもどる
 }
 function drawLevelUp() {
   overlay(0.45);
@@ -1977,6 +2012,17 @@ function drawItems() {
       ctx.font = `bold ${s * 0.9}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText('なかま', sx, iy - s * 2.1);
+    } else if (it.kind === 'heart') {
+      // 回復ハート（やわらかい光つき）
+      ctx.save();
+      const glow = ctx.createRadialGradient(sx, iy, s * 0.2, sx, iy, s * 1.7);
+      glow.addColorStop(0, 'rgba(255,170,190,0.85)');
+      glow.addColorStop(1, 'rgba(255,170,190,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath(); ctx.arc(sx, iy, s * 1.7, 0, Math.PI * 2); ctx.fill();
+      const pop = 1 + Math.sin(it.bob) * 0.08;
+      drawHeart(sx, iy, s * 1.15 * pop, '#FF5B6E');
+      ctx.restore();
     } else {
       // 昆虫ゼリー（カップ）
       ctx.fillStyle = '#FFB84D';
@@ -2829,9 +2875,17 @@ function drawHUD() {
     ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = bh * 0.14;
     roundRect(bx, by, bw, bh, bh / 2); ctx.stroke();
   } else {
-    // 進捗バー
-    const bw = W * 0.5, bh = Math.min(W, H) * 0.02;
-    const bx = W / 2 - bw / 2, by = pad + bh;
+    // 進捗バー（左上パネルと右上の音楽ボタンに被らないよう配置）
+    const bh = Math.min(W, H) * 0.02;
+    const panelRight = pad * 0.4 + panelW;
+    const mb = musicButton();
+    const flagRoom = bh * 3.8;                          // 旗アイコンぶんの余白
+    const barRight = (mb.x - mb.r) - flagRoom;          // 音楽ボタンの手前まで
+    let bx = panelRight + hs * 1.1;                     // パネルの右どなりから
+    const minBW = Math.min(W, H) * 0.14;
+    if (barRight - bx < minBW) bx = Math.max(pad, barRight - minBW);
+    const bw = Math.max(minBW, barRight - bx);
+    const by = pad + hs - bh / 2;                       // ハートと同じ高さ
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
     roundRect(bx, by, bw, bh, bh / 2);
     ctx.fill();
@@ -2842,7 +2896,8 @@ function drawHUD() {
     // 旗アイコン
     ctx.font = `${bh * 2.2}px sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillText('🏁', bx + bw + bh * 1.8, by + bh * 0.6);
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🏁', bx + bw + bh * 1.8, by + bh * 0.5);
     // 進捗マーカー
     ctx.fillStyle = '#4A2C12';
     ctx.beginPath();
@@ -3008,6 +3063,13 @@ if (typeof location !== 'undefined' && location.search.indexOf('debug') >= 0) {
     addEnemyAhead(y) {
       enemies.push({ x: scrollX + W * 0.7, y: y || H * 0.4, baseY: y || H * 0.4, hp: 3, maxHp: 3, fireCd: 0.2, bob: 0, hurt: 0, wing: 0 });
     },
+    setHearts(n) { hearts = n; },
+    addHeartAhead() { items.push({ x: scrollX + beetle.x + beetle.size * 2.2, y: beetle.y, taken: false, bob: 0, kind: 'heart' }); },
+    get itemKinds() { return items.filter(i => !i.taken).map(i => i.kind); },
+    get enemyHpTotal() { return enemies.reduce((a, e) => a + e.hp, 0); },
+    goStageSelect() { charIndex = 0; state = STATE.STAGESELECT; stateTimer = 1; },
+    tapAt(x, y) { pointerDown('t', x, y); pointerUp('t'); },
+    backBtnPos() { const b = backButton(); return { x: b.x, y: b.y }; },
     enemyFireAll() { for (const e of enemies) enemyFire(e.x - scrollX, e.y); },
     get state() { return state; },
     get stageIndex() { return stageIndex; },

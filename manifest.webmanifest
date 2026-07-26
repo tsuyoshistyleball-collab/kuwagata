@@ -1,0 +1,26 @@
+{
+  "name": "クワガタ フライング！",
+  "short_name": "クワガタ",
+  "description": "クワガタとカブトムシで遊ぶ横スクロールアクションゲーム",
+  "lang": "ja",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#3f8f2f",
+  "theme_color": "#3f8f2f",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

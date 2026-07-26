@@ -7,6 +7,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#87CEEB">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg">
 <title>クワガタ フライング！</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -2998,6 +3001,15 @@ if (typeof location !== 'undefined' && location.search.indexOf('debug') >= 0) {
 }
 
 })();
+</script>
+<script>
+// PWA: オフライン起動＆ホーム画面アプリ化のためのサービスワーカー登録。
+// file:// や claude.ai の iframe など未対応環境では静かにスキップする。
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
 </script>
 </body>
 </html>

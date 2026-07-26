@@ -301,7 +301,14 @@ const Music = {
 };
 
 // ---------- ゲーム状態 ----------
-const STATE = { TITLE: 0, PLAY: 1, GOAL: 2, RETRY: 3, BOSS: 4, STAGESELECT: 5, LEVELUP: 6 };
+const STATE = { TITLE: 0, PLAY: 1, GOAL: 2, RETRY: 3, BOSS: 4, STAGESELECT: 5, LEVELUP: 6, CHARSELECT: 7 };
+
+// プレイヤーキャラ（クワガタ / カブトムシ）
+const CHARS = [
+  { id: 'stag', name: 'クワガタ', emoji: '🪲' },
+  { id: 'kabuto', name: 'カブトムシ', emoji: '🪲' }
+];
+let charIndex = 0;
 let state = STATE.TITLE;
 let pressing = false;
 
@@ -629,14 +636,21 @@ let pointers = new Map();   // id -> 'fly' | 'atk'
 function refreshPressing() {
   pressing = [...pointers.values()].includes('fly');
 }
-// タイトル/結果画面 → ステージ選択へ
+// タイトル/結果画面 → キャラ選択へ
 function tryStart() {
   if (state === STATE.TITLE || state === STATE.GOAL || state === STATE.RETRY) {
-    if (stateTimer > 0.6) { state = STATE.STAGESELECT; stateTimer = 0; Music.stop(); }
+    if (stateTimer > 0.6) { state = STATE.CHARSELECT; stateTimer = 0; Music.stop(); }
     return true;
   }
   return false;
 }
+function selectChar(idx) {
+  charIndex = idx;
+  state = STATE.STAGESELECT;
+  stateTimer = 0;
+  sfx.start();
+}
+function charCardAt(x, y) { const r = cardRects(CHARS.length); for (let i = 0; i < r.length; i++) if (inRect(x, y, r[i])) return i; return -1; }
 function startStage(idx) {
   stageIndex = idx;
   resetGame();
@@ -669,6 +683,11 @@ function levelChoiceAt(x, y) { const r = cardRects(levelChoices.length); for (le
 
 function pointerDown(id, x, y) {
   initAudio();
+  // キャラ選択：カードをタップ
+  if (state === STATE.CHARSELECT) {
+    if (stateTimer > 0.3) { const i = charCardAt(x, y); if (i >= 0) selectChar(i); }
+    return;
+  }
   // ステージ選択：カードをタップ
   if (state === STATE.STAGESELECT) {
     if (stateTimer > 0.4) { const i = stageCardAt(x, y); if (i >= 0) startStage(i); }
@@ -729,8 +748,8 @@ function update(dt) {
 
   if (state === STATE.BOSS) { updateBoss(dt); return; }
 
-  // レベルアップ中は完全に一時停止／ステージ選択も世界を止める
-  if (state === STATE.LEVELUP || state === STATE.STAGESELECT) { updateParticles(dt); return; }
+  // レベルアップ中は完全に一時停止／キャラ・ステージ選択も世界を止める
+  if (state === STATE.LEVELUP || state === STATE.STAGESELECT || state === STATE.CHARSELECT) { updateParticles(dt); return; }
 
   if (state !== STATE.PLAY) {
     // タイトル画面などではふわふわ浮かぶ
@@ -1345,7 +1364,8 @@ function updateConfetti(dt) {
 
 // ---------- 描画 ----------
 function draw() {
-  // ステージ選択は専用画面
+  // キャラ／ステージ選択は専用画面
+  if (state === STATE.CHARSELECT) { drawCharSelect(); return; }
   if (state === STATE.STAGESELECT) { drawStageSelect(); return; }
 
   ctx.save();
@@ -1525,6 +1545,55 @@ function drawCard(r, accent, selected) {
   roundRect(r.x, r.y, r.w, r.h, r.h * 0.16); ctx.fill();
   ctx.strokeStyle = accent; ctx.lineWidth = Math.min(W, H) * 0.008;
   roundRect(r.x, r.y, r.w, r.h, r.h * 0.16); ctx.stroke();
+}
+// キャラのアイコン（前向き）※選択画面用
+function drawCharIcon(cidx, x, y, s) {
+  ctx.save();
+  ctx.translate(x, y);
+  // 羽
+  ctx.fillStyle = 'rgba(255,236,179,0.7)';
+  ctx.beginPath(); ctx.ellipse(-s * 0.2, -s * 0.85, s * 0.5, s * 0.95, -0.5, 0, Math.PI * 2); ctx.fill();
+  // 脚
+  ctx.strokeStyle = '#160C05'; ctx.lineWidth = s * 0.12; ctx.lineCap = 'round';
+  for (const lx of [-s * 0.5, 0, s * 0.4]) { ctx.beginPath(); ctx.moveTo(lx, s * 0.45); ctx.lineTo(lx - s * 0.12, s * 0.95); ctx.stroke(); }
+  // 体
+  const bg = ctx.createLinearGradient(-s, -s * 0.6, s * 0.6, s * 0.6);
+  bg.addColorStop(0, '#4A2E17'); bg.addColorStop(0.5, '#2A1810'); bg.addColorStop(1, '#150B04');
+  ctx.fillStyle = bg;
+  ctx.beginPath(); ctx.ellipse(-s * 0.1, 0, s * 1.15, s * 0.66, 0, 0, Math.PI * 2); ctx.fill();
+  // 前胸
+  ctx.fillStyle = '#3A2211';
+  ctx.beginPath(); ctx.ellipse(s * 0.6, 0, s * 0.5, s * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+  // 頭
+  ctx.fillStyle = '#150B04';
+  ctx.beginPath(); ctx.ellipse(s * 1.1, 0, s * 0.42, s * 0.44, 0, 0, Math.PI * 2); ctx.fill();
+  // 前の武器（クワガタ＝大あご／カブトムシ＝角）
+  if (cidx === 1) drawKabutoHorn(s, false); else { drawMandible(s, -1, 1, mandGrad(s, '#5A3A1E', '#241206'), '#0E0702'); drawMandible(s, 1, 1, mandGrad(s, '#5A3A1E', '#241206'), '#0E0702'); }
+  // 目
+  ctx.fillStyle = '#FFF'; ctx.beginPath(); ctx.arc(s * 1.08, -s * 0.12, s * 0.16, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#161616'; ctx.beginPath(); ctx.arc(s * 1.13, -s * 0.1, s * 0.09, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawCharSelect() {
+  const base = Math.min(W, H);
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#BDE0C8'); g.addColorStop(1, '#F0EAD8');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  bigText('キャラを えらんでね', H * 0.16, base * 0.07, '#5C3317', '#FFF');
+
+  const rects = cardRects(CHARS.length);
+  const landscape = W > H * 1.15;
+  for (let i = 0; i < CHARS.length; i++) {
+    const ch = CHARS[i], r = rects[i];
+    drawCard(r, '#E8A33B');
+    const iconY = landscape ? r.y + r.h * 0.38 : r.y + r.h * 0.42;
+    drawCharIcon(i, r.x + r.w * 0.5, iconY, r.h * (landscape ? 0.22 : 0.26));
+    ctx.fillStyle = '#5C3317';
+    ctx.font = `bold ${r.h * (landscape ? 0.16 : 0.24)}px 'Hiragino Maru Gothic ProN', 'BIZ UDGothic', sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(ch.name, r.x + r.w / 2, r.y + r.h * (landscape ? 0.82 : 0.8));
+  }
+  if (stateTimer > 0.3) bigText('タップで つぎへ！', H * 0.93, base * 0.045, '#FFF', '#E8743B');
 }
 function drawStageSelect() {
   const base = Math.min(W, H);
@@ -2216,6 +2285,28 @@ function drawMandible(vs, my, open, fill, stroke) {
   ctx.fillStyle = fill; ctx.fill();
   ctx.strokeStyle = stroke; ctx.lineWidth = vs * 0.045; ctx.lineJoin = 'round'; ctx.stroke();
 }
+// カブトムシの角（前方＝右向き。頭の大きな角＋前胸の小さな角。先が二又）
+function drawKabutoHorn(vs, gold) {
+  const fill = gold ? mandGrad(vs, '#FFF3B0', '#E8A417') : mandGrad(vs, '#5A3A1E', '#241206');
+  const stroke = gold ? '#8A5E00' : '#0E0702';
+  ctx.lineJoin = 'round'; ctx.lineWidth = vs * 0.05; ctx.strokeStyle = stroke; ctx.fillStyle = fill;
+  // 頭の大きな角
+  ctx.beginPath();
+  ctx.moveTo(vs * 1.15, vs * 0.12);
+  ctx.quadraticCurveTo(vs * 1.95, -vs * 0.15, vs * 2.15, -vs * 0.78);   // 下側の縁（前へ→上へ）
+  ctx.lineTo(vs * 2.02, -vs * 1.02);                                     // 下のツノ先
+  ctx.lineTo(vs * 2.24, -vs * 0.88);                                     // 二又のくぼみ
+  ctx.lineTo(vs * 2.32, -vs * 1.08);                                     // 上のツノ先
+  ctx.lineTo(vs * 2.42, -vs * 0.82);
+  ctx.quadraticCurveTo(vs * 2.12, -vs * 0.2, vs * 1.28, -vs * 0.12);     // 上側の縁を付け根へ
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // 前胸の小さな角
+  ctx.beginPath();
+  ctx.moveTo(vs * 0.7, -vs * 0.18);
+  ctx.quadraticCurveTo(vs * 1.25, -vs * 0.5, vs * 1.42, -vs * 0.32);
+  ctx.quadraticCurveTo(vs * 1.18, -vs * 0.12, vs * 0.78, vs * 0.02);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+}
 function drawStar(x, y, r, color) {
   ctx.save();
   ctx.translate(x, y);
@@ -2326,12 +2417,16 @@ function drawBeetle() {
   ctx.fillStyle = gold ? '#C8931A' : '#150B04';
   ctx.beginPath(); ctx.ellipse(vs * 1.12, 0, vs * 0.42, vs * 0.44, 0, 0, Math.PI * 2); ctx.fill();
 
-  // ---- 大あご（クワガタの象徴！ハサミ型。色はパワーで変えず、最終形態のみ金色） ----
-  let mandFill, mandStroke;
-  if (gold) { mandFill = mandGrad(vs, '#FFF3B0', '#E8A417'); mandStroke = '#8A5E00'; }
-  else { mandFill = mandGrad(vs, '#5A3A1E', '#241206'); mandStroke = '#0E0702'; }
-  drawMandible(vs, -1, chomp, mandFill, mandStroke);
-  drawMandible(vs, 1, chomp, mandFill, mandStroke);
+  // ---- 前の武器（クワガタ＝大あご／カブトムシ＝角。最終形態のみ金色） ----
+  if (charIndex === 1) {
+    drawKabutoHorn(vs, gold);
+  } else {
+    let mandFill, mandStroke;
+    if (gold) { mandFill = mandGrad(vs, '#FFF3B0', '#E8A417'); mandStroke = '#8A5E00'; }
+    else { mandFill = mandGrad(vs, '#5A3A1E', '#241206'); mandStroke = '#0E0702'; }
+    drawMandible(vs, -1, chomp, mandFill, mandStroke);
+    drawMandible(vs, 1, chomp, mandFill, mandStroke);
+  }
 
   // ---- 目 ----
   ctx.fillStyle = '#FFF';
@@ -2865,6 +2960,8 @@ if (typeof location !== 'undefined' && location.search.indexOf('debug') >= 0) {
     titleTap() { state = STATE.TITLE; stateTimer = 1; tryStart(); },
     setLevel(n) { level = n; beetle.power = n; },
     setJellies(n) { jellies = n; },
+    setChar(i) { charIndex = i; },
+    get charIndex() { return charIndex; },
     setWeapon(w) { beetle.weapons[w] = (beetle.weapons[w] || 0) + 1; },
     special() { triggerSpecial(); },
     erupt() { for (const t of trees) if (t.x > -W * 0.2 && t.x < W + W * 0.2) eruptVolcano(t); },

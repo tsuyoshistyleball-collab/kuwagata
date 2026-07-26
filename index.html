@@ -33,10 +33,33 @@
     height: 100dvh;
     touch-action: none;
   }
+  #installBtn {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    display: none;
+    padding: 12px 22px;
+    border: 3px solid #fff;
+    border-radius: 999px;
+    background: #ff9a3c;
+    color: #fff;
+    font: bold 17px sans-serif;
+    box-shadow: 0 4px 10px rgba(0,0,0,.35);
+    -webkit-tap-highlight-color: transparent;
+    cursor: pointer;
+    animation: installPulse 1.4s ease-in-out infinite;
+  }
+  @keyframes installPulse {
+    0%, 100% { transform: translateX(-50%) scale(1); }
+    50%      { transform: translateX(-50%) scale(1.07); }
+  }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<button id="installBtn">📲 アプリにする</button>
 <script>
 (() => {
 'use strict';
@@ -3010,6 +3033,43 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   });
 }
+
+// ワンタップでインストールできるボタン。
+// Chrome がインストール可能と判断したときだけ表示する。
+(function () {
+  const btn = document.getElementById('installBtn');
+  if (!btn) return;
+  const standalone = window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;
+  let deferred = null;
+  let started = false;
+
+  // ゲームを始めたら邪魔にならないよう隠す
+  const game = document.getElementById('game');
+  if (game) game.addEventListener('pointerdown', () => {
+    started = true;
+    btn.style.display = 'none';
+  }, { once: true });
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferred = e;
+    if (!standalone && !started) btn.style.display = 'block';
+  });
+
+  btn.addEventListener('click', async () => {
+    btn.style.display = 'none';
+    if (!deferred) return;
+    deferred.prompt();
+    try { await deferred.userChoice; } catch (_) {}
+    deferred = null;
+  });
+
+  window.addEventListener('appinstalled', () => {
+    deferred = null;
+    btn.style.display = 'none';
+  });
+})();
 </script>
 </body>
 </html>

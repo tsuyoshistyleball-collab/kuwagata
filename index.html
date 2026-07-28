@@ -432,10 +432,13 @@ function courseSetup() {
       const ix = x + spacing * 0.5;
       const safeTop = H * 0.2, safeBottom = H * 0.75;
       const iy = safeTop + Math.random() * (safeBottom - safeTop);
-      let kind = 'jelly';
-      if (i === 3 || i === 8 || i === 13) kind = 'friend';
-      else if (i === 5 || i === 11 || i === 15) kind = 'heart';   // ときどき回復のハート
+      const kind = (i === 3 || i === 8 || i === 13) ? 'friend' : 'jelly';
       items.push({ x: ix, y: iy, taken: false, bob: Math.random() * Math.PI * 2, kind });
+      // ときどき回復ハートを「追加で」置く（ゼリーは減らさない）
+      if (i === 5 || i === 11 || i === 15) {
+        const hy = safeTop + Math.random() * (safeBottom - safeTop);
+        items.push({ x: ix + spacing * 0.28, y: hy, taken: false, bob: Math.random() * Math.PI * 2, kind: 'heart' });
+      }
     }
   }
 
@@ -943,8 +946,8 @@ function applyUpgrade(u) {
 // ---------- 仲間の虫 ----------
 function addCompanion() {
   if (companions.length >= MAX_COMPANIONS) return;   // 仲間は最大4匹
-  // 1人目＝バッタ、2人目＝カマキリ、以降テントウムシ・ハチ
-  const types = ['grasshopper', 'mantis', 'ladybug', 'bee'];
+  // 1人目＝セミ、2人目＝カマキリ、以降テントウムシ・ハチ
+  const types = ['cicada', 'mantis', 'ladybug', 'bee'];
   const i = companions.length;
   companions.push({
     type: types[i % types.length],
@@ -2123,6 +2126,36 @@ function drawBug(type, x, y, s, wingPhase) {
     // 触角
     ctx.strokeStyle = '#4E9A34'; ctx.lineWidth = s * 0.045;
     ctx.beginPath(); ctx.moveTo(s * 0.92, -s * 0.34); ctx.lineTo(s * 1.28, -s * 0.6); ctx.stroke();
+  } else if (type === 'cicada') {
+    // セミ（茶色い体＋透明な大きな羽）※前方＝右向き
+    // 脚
+    ctx.strokeStyle = '#4A2E18'; ctx.lineWidth = s * 0.07; ctx.lineCap = 'round';
+    for (const lx of [s * 0.25, -s * 0.05, -s * 0.35]) { ctx.beginPath(); ctx.moveTo(lx, s * 0.28); ctx.lineTo(lx - s * 0.12, s * 0.62); ctx.stroke(); }
+    // 羽（背中を屋根状に覆う透明な羽・後方へ長い）
+    ctx.fillStyle = 'rgba(215,228,238,0.5)';
+    ctx.strokeStyle = 'rgba(110,130,140,0.6)'; ctx.lineWidth = s * 0.03;
+    for (const sgn of [1, -1]) {
+      ctx.save(); ctx.rotate(sgn * (0.14 + flap * 0.04));
+      ctx.beginPath(); ctx.ellipse(-s * 0.5, -s * 0.12, s * 1.15, s * 0.4, -0.16, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.restore();
+    }
+    // 体（ずんぐり茶色）
+    const cg = ctx.createLinearGradient(0, -s * 0.5, 0, s * 0.5);
+    cg.addColorStop(0, '#7C5432'); cg.addColorStop(1, '#472C17');
+    ctx.fillStyle = cg;
+    ctx.beginPath(); ctx.ellipse(-s * 0.05, s * 0.06, s * 0.82, s * 0.44, 0, 0, Math.PI * 2); ctx.fill();
+    // 腹の節
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = s * 0.04;
+    for (const bx of [-s * 0.5, -s * 0.28, -s * 0.06]) { ctx.beginPath(); ctx.moveTo(bx, -s * 0.08); ctx.lineTo(bx, s * 0.42); ctx.stroke(); }
+    // 頭（前方・幅広）
+    ctx.fillStyle = '#5C3A20';
+    ctx.beginPath(); ctx.ellipse(s * 0.68, 0, s * 0.34, s * 0.38, 0, 0, Math.PI * 2); ctx.fill();
+    // 左右に離れた大きな目（セミらしさ）
+    for (const ey of [-s * 0.28, s * 0.28]) {
+      ctx.fillStyle = '#241009'; ctx.beginPath(); ctx.arc(s * 0.8, ey, s * 0.13, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.beginPath(); ctx.arc(s * 0.83, ey - s * 0.03, s * 0.045, 0, Math.PI * 2); ctx.fill();
+    }
   } else {
     // テントウムシ
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
@@ -3048,6 +3081,7 @@ if (typeof location !== 'undefined' && location.search.indexOf('debug') >= 0) {
     erupt() { for (const t of trees) if (t.x > -W * 0.2 && t.x < W + W * 0.2) eruptVolcano(t); },
     get specialCd() { return specialCd; },
     get companionModes() { return companions.map(c => c.mode); },
+    get companionTypes() { return companions.map(c => c.type); },
     getWeapons() { return Object.assign({}, beetle.weapons); },
     forceLevelUp() { exp = expToNext; triggerLevelUp(); },
     pickChoice(i) { if (levelChoices[i]) applyUpgrade(levelChoices[i]); },
